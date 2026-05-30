@@ -1,0 +1,72 @@
+# Alphara Dividends
+
+A minimal iOS app that tracks dividend announcements for a user-managed watchlist of
+ticker symbols. It resolves tickers to company names, monitors each company for newly
+announced dividends, fires a local notification when one appears, and shows an
+"Upcoming" list sorted soonest-first with company, ex-dividend date, payment date, and
+amount.
+
+## Architecture
+
+- **SwiftUI + SwiftData**, iOS 17+.
+- **Data source:** [Polygon.io](https://polygon.io) free tier, behind a `DividendDataSource`
+  protocol so the provider (or a future server-backed push model) can be swapped without
+  touching the UI.
+  - Ticker search: `GET /v3/reference/tickers?search=` → ticker + company name.
+  - Dividends: `GET /v3/reference/dividends?ticker=…&ex_dividend_date.gte=today` →
+    ex-date, pay-date, record-date, declaration-date, cash amount, frequency.
+- **Background monitoring:** `BGAppRefreshTask` (id `com.alphara.dividends.refresh`) runs
+  the same sync engine as foreground refresh and fires **local** notifications for new
+  events. New events are deduped by Polygon's stable dividend `id`.
+- **API key:** entered in Settings, stored in the **Keychain**. No shared key is embedded
+  in the binary — each user supplies their own free Polygon key.
+
+### Source layout
+```
+AlpharaDividends/
+  AlpharaDividendsApp.swift     App entry: SwiftData container, BG task registration, notif auth
+  Models/                       TrackedCompany, DividendEvent (@Model)
+  Services/                     PolygonClient, DividendSyncService, BackgroundRefreshManager,
+                                NotificationManager, RateLimiter, KeychainStore, DividendDataSource
+  Views/                        RootView, UpcomingDividendsView, WatchlistView, AddTickerView, SettingsView
+AlpharaDividendsTests/          DividendSyncService dedupe / detection tests
+```
+
+## Build & run
+
+This repo uses [XcodeGen](https://github.com/yonwh/XcodeGen) to generate the Xcode
+project from `project.yml` (keeps the repo free of a hand-edited `.pbxproj`).
+
+```bash
+brew install xcodegen          # one-time
+xcodegen generate              # creates AlpharaDividends.xcodeproj
+open AlpharaDividends.xcodeproj
+```
+
+Then in Xcode: select the `AlpharaDividends` scheme, choose an iOS 17+ Simulator or your
+device, and Run. (Building/running requires full **Xcode**, not just Command Line Tools.)
+
+### First-time setup in the app
+1. **Settings → Polygon API key:** paste a free key from
+   [polygon.io](https://polygon.io/dashboard/signup) and Save.
+2. **Allow notifications** when prompted (or enable later in Settings).
+3. **Watchlist → +:** search for companies (e.g. `AAPL`, `Apple`, `KO`) and add them.
+4. **Upcoming:** pull-to-refresh (or Settings → Refresh now) to fetch dividends.
+
+## Testing the background task
+While the app is paused in the Xcode debugger, run:
+```
+e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.alphara.dividends.refresh"]
+```
+This forces a background-refresh run so you can verify sync + notifications.
+
+Run unit tests with `Cmd-U` (or `xcodebuild test -scheme AlpharaDividends`).
+
+## Known limitations (by design)
+- **Background timing is best-effort.** `BGAppRefreshTask` is scheduled by iOS at its
+  discretion — typically a few times a day, never while the app is force-quit, and
+  user-disableable. **Foreground pull-to-refresh is the reliable path.** True real-time
+  push would require a server + APNs (intentionally out of scope for this on-device build).
+- **Polygon free tier:** 5 requests/minute and end-of-day data, so a freshly announced
+  dividend can take up to ~a day to surface, and large watchlists refresh slowly because
+  dividend calls are throttled ~12.5s apart during background sync.
