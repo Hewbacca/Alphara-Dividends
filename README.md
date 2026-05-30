@@ -3,8 +3,12 @@
 A minimal iOS app that tracks dividend announcements for a user-managed watchlist of
 ticker symbols. It resolves tickers to company names, monitors each company for newly
 announced dividends, fires a local notification when one appears, and shows an
-"Upcoming" list sorted soonest-first with company, ex-dividend date, payment date, and
-amount.
+"Upcoming" list with company, ex-dividend date, payment date, and amount.
+
+A dividend stays in the **Upcoming** list until it has actually been **paid** — i.e. while
+its payment date (or, if none is published, its ex-date) is today or later. So a dividend
+that has already gone ex-dividend but hasn't paid yet still shows. The list is sorted by
+soonest payment date first.
 
 ## Architecture
 

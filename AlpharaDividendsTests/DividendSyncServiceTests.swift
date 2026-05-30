@@ -25,6 +25,17 @@ final class DividendSyncServiceTests: XCTestCase {
         )
     }
 
+    private func record(id: String, exDays: Int, payDays: Int) -> DividendRecord {
+        let cal = Calendar.current
+        return DividendRecord(
+            id: id, ticker: "AAPL",
+            exDate: cal.date(byAdding: .day, value: exDays, to: .now)!,
+            payDate: cal.date(byAdding: .day, value: payDays, to: .now)!,
+            recordDate: nil, declarationDate: nil,
+            cashAmount: 0.25, currency: "USD", frequency: 4
+        )
+    }
+
     func testOnlyFutureUnseenEventsAreInserted() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -95,6 +106,32 @@ final class DividendSyncServiceTests: XCTestCase {
 
         let new = try await service.sync(context: context)
         XCTAssertEqual(new.map(\.id), ["soon"])
+    }
+
+    func testPastExDateButPendingPaymentIsIncluded() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
+
+        // Already went ex-dividend 5 days ago, but pays in 10 days — still upcoming.
+        let mock = MockDataSource(records: [record(id: "pending", exDays: -5, payDays: 10)])
+        let service = DividendSyncService(dataSource: mock)
+
+        let new = try await service.sync(context: context)
+        XCTAssertEqual(new.map(\.id), ["pending"])
+    }
+
+    func testFullyPaidDividendIsExcluded() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
+
+        // Ex-dividend and payment both in the past — done, should not appear.
+        let mock = MockDataSource(records: [record(id: "paid", exDays: -20, payDays: -2)])
+        let service = DividendSyncService(dataSource: mock)
+
+        let new = try await service.sync(context: context)
+        XCTAssertTrue(new.isEmpty)
     }
 
     func testNewlyAnnouncedDividendIsDetected() async throws {

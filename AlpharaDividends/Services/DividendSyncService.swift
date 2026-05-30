@@ -14,9 +14,15 @@ struct DividendSyncService {
     /// small (typically 1-3 pages) while still catching everything that's been declared.
     let lookaheadDays: Int
 
-    init(dataSource: DividendDataSource, lookaheadDays: Int = 60) {
+    /// How far *back* to look on the ex-dividend date. A dividend can go ex-dividend up to
+    /// a few weeks before it pays, so we include recently-ex'd dividends to catch those
+    /// whose payment is still pending. 45 days comfortably covers typical ex→pay gaps.
+    let lookbackDays: Int
+
+    init(dataSource: DividendDataSource, lookaheadDays: Int = 60, lookbackDays: Int = 45) {
         self.dataSource = dataSource
         self.lookaheadDays = lookaheadDays
+        self.lookbackDays = lookbackDays
     }
 
     /// Fetch upcoming dividends for the whole watchlist in a single market-wide query and
@@ -28,6 +34,7 @@ struct DividendSyncService {
         guard !companies.isEmpty else { return [] }
 
         let today = Calendar.current.startOfDay(for: .now)
+        let from = Calendar.current.date(byAdding: .day, value: -lookbackDays, to: today) ?? today
         let through = Calendar.current.date(byAdding: .day, value: lookaheadDays, to: today) ?? today
 
         // Ticker → company name (use the user's saved name for notifications/UI).
@@ -37,13 +44,15 @@ struct DividendSyncService {
         )
         let tickers = Set(nameByTicker.keys)
 
-        let records = try await dataSource.fetchUpcomingDividends(in: today...through, matching: tickers)
+        let records = try await dataSource.fetchUpcomingDividends(in: from...through, matching: tickers)
 
         let existing = try context.fetch(FetchDescriptor<DividendEvent>())
         var existingIDs = Set(existing.map(\.id))
         var newEvents: [DividendEvent] = []
 
-        for record in records where record.exDate >= today {
+        // Keep a dividend while it is not yet paid (payment today/future), or — if no
+        // payment date is published — while its ex-date is still upcoming.
+        for record in records where (record.payDate ?? record.exDate) >= today {
             guard !existingIDs.contains(record.id) else { continue }
             let event = DividendEvent(
                 id: record.id,
