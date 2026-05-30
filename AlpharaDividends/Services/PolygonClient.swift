@@ -67,7 +67,7 @@ struct PolygonClient: DividendDataSource {
             URLQueryItem(name: "ticker", value: symbol),
             URLQueryItem(name: "order", value: "desc"),
             URLQueryItem(name: "sort", value: "ex_dividend_date"),
-            URLQueryItem(name: "limit", value: "8"),
+            URLQueryItem(name: "limit", value: "12"),
         ]
         guard let url = components.url else { throw PolygonError.invalidResponse }
 

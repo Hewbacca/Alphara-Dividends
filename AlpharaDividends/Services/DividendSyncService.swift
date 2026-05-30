@@ -69,7 +69,8 @@ struct DividendSyncService {
                     declarationDate: record.declarationDate,
                     cashAmount: record.cashAmount,
                     currency: record.currency,
-                    frequency: record.frequency
+                    frequency: record.frequency,
+                    previousAmount: Self.previousComparableAmount(for: record, in: records)
                 )
                 context.insert(event)
                 existingIDs.insert(record.id)
@@ -104,6 +105,17 @@ struct DividendSyncService {
     private func isStale(_ company: TrackedCompany, now: Date) -> Bool {
         guard let last = company.lastCheckedAt else { return true }
         return now.timeIntervalSince(last) >= staleAfter
+    }
+
+    /// Amount of the most recent *comparable* prior dividend: same cadence (`frequency`) and
+    /// currency, with an earlier ex-date. Returns nil for one-time specials (`frequency == 0`)
+    /// and when no like-for-like predecessor exists in the fetched batch — both render as "New".
+    static func previousComparableAmount(for r: DividendRecord, in records: [DividendRecord]) -> Double? {
+        guard r.frequency != 0 else { return nil }
+        return records
+            .filter { $0.exDate < r.exDate && $0.frequency == r.frequency && $0.currency == r.currency }
+            .max { $0.exDate < $1.exDate }?
+            .cashAmount
     }
 }
 

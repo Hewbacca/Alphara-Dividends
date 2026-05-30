@@ -41,12 +41,23 @@ enum NotificationManager {
 
     static func body(for event: DividendEvent) -> String {
         let amount = CurrencyFormat.string(event.cashAmount, currency: event.currency)
-        var parts = ["\(event.ticker) \(amount)/share"]
+        var parts = ["\(event.ticker) \(amount)/share (\(changeClause(for: event)))"]
         parts.append("ex-div \(DateFormat.medium(event.exDate))")
         if let pay = event.payDate {
             parts.append("pays \(DateFormat.medium(pay))")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// e.g. "increased from $0.25", "cut from $0.25", "unchanged", "new".
+    static func changeClause(for event: DividendEvent) -> String {
+        switch event.change {
+        case .new, .unchanged:
+            return event.change.word
+        case .increased, .decreased:
+            let prev = event.previousAmount.map { CurrencyFormat.string($0, currency: event.currency) }
+            return prev.map { "\(event.change.word) from \($0)" } ?? event.change.word
+        }
     }
 }
 

@@ -71,16 +71,28 @@ private struct DividendRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(alignment: .firstTextBaseline) {
                 Text(event.companyName).font(.headline)
                 Spacer()
+                if let symbol = changeSymbol {
+                    Image(systemName: symbol)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(changeColor)
+                }
                 Text(CurrencyFormat.string(event.cashAmount, currency: event.currency))
                     .font(.headline)
                     .monospacedDigit()
+                    .foregroundStyle(changeColor)
             }
-            Text(event.ticker)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(event.ticker)
+                if let caption = changeCaption {
+                    Text("·")
+                    Text(caption)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Label(DateFormat.medium(event.exDate), systemImage: "calendar")
                 if let pay = event.payDate {
@@ -91,5 +103,32 @@ private struct DividendRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+    }
+
+    private var changeColor: Color {
+        switch event.change {
+        case .increased: return .green
+        case .decreased: return .red
+        case .unchanged, .new: return .primary
+        }
+    }
+
+    private var changeSymbol: String? {
+        switch event.change {
+        case .increased: return "arrow.up"
+        case .decreased: return "arrow.down"
+        case .unchanged, .new: return nil
+        }
+    }
+
+    /// Secondary caption next to the ticker, e.g. "from $0.25" or "New".
+    private var changeCaption: String? {
+        switch event.change {
+        case .new: return "New"
+        case .increased, .decreased:
+            guard let prev = event.previousAmount else { return nil }
+            return "from \(CurrencyFormat.string(prev, currency: event.currency))"
+        case .unchanged: return nil
+        }
     }
 }

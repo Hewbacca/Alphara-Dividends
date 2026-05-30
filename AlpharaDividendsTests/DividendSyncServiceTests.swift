@@ -149,6 +149,96 @@ final class DividendSyncServiceTests: XCTestCase {
         XCTAssertEqual(forced.map(\.id), ["future"], "force should re-check even fresh tickers")
         XCTAssertEqual(mock.queriedTickers, ["AAPL"])
     }
+
+    // MARK: - Dividend change vs. previous payment
+
+    private func record(
+        id: String, ticker: String = "AAPL",
+        exDays: Int, payDays: Int, amount: Double, frequency: Int = 4
+    ) -> DividendRecord {
+        let cal = Calendar.current
+        return DividendRecord(
+            id: id, ticker: ticker,
+            exDate: cal.date(byAdding: .day, value: exDays, to: .now)!,
+            payDate: cal.date(byAdding: .day, value: payDays, to: .now)!,
+            recordDate: nil, declarationDate: nil,
+            cashAmount: amount, currency: "USD", frequency: frequency
+        )
+    }
+
+    /// Containers must outlive the events they vend (their context references the container).
+    private var retainedContainers: [ModelContainer] = []
+
+    /// Insert one upcoming dividend whose batch also contains the given priors; return it.
+    private func syncUpcoming(
+        upcoming: DividendRecord, priors: [DividendRecord]
+    ) async throws -> DividendEvent {
+        let container = try makeContainer()
+        retainedContainers.append(container) // keep alive for the duration of the test
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: upcoming.ticker, name: "Test"))
+        let mock = MockDataSource(records: [upcoming] + priors)
+        let new = try await service(mock).sync(context: context)
+        return try XCTUnwrap(new.first)
+    }
+
+    func testChangeIncreased() async throws {
+        let event = try await syncUpcoming(
+            upcoming: record(id: "up", exDays: 5, payDays: 10, amount: 0.26),
+            priors: [record(id: "p", exDays: -85, payDays: -80, amount: 0.25)]
+        )
+        XCTAssertEqual(event.previousAmount, 0.25)
+        XCTAssertEqual(event.change, .increased)
+    }
+
+    func testChangeDecreased() async throws {
+        let event = try await syncUpcoming(
+            upcoming: record(id: "up", exDays: 5, payDays: 10, amount: 0.20),
+            priors: [record(id: "p", exDays: -85, payDays: -80, amount: 0.25)]
+        )
+        XCTAssertEqual(event.change, .decreased)
+    }
+
+    func testChangeUnchanged() async throws {
+        let event = try await syncUpcoming(
+            upcoming: record(id: "up", exDays: 5, payDays: 10, amount: 0.25),
+            priors: [record(id: "p", exDays: -85, payDays: -80, amount: 0.25)]
+        )
+        XCTAssertEqual(event.change, .unchanged)
+    }
+
+    func testNoPriorIsNew() async throws {
+        let event = try await syncUpcoming(
+            upcoming: record(id: "up", exDays: 5, payDays: 10, amount: 0.25),
+            priors: []
+        )
+        XCTAssertNil(event.previousAmount)
+        XCTAssertEqual(event.change, .new)
+    }
+
+    func testSpecialDividendIgnoredInComparison() async throws {
+        // Upcoming regular 0.26; an interleaved one-time special (freq 0, $1.00) should be
+        // ignored, so it compares to the previous regular 0.25 ⇒ increased.
+        let event = try await syncUpcoming(
+            upcoming: record(id: "up", exDays: 5, payDays: 10, amount: 0.26, frequency: 4),
+            priors: [
+                record(id: "special", exDays: -30, payDays: -25, amount: 1.00, frequency: 0),
+                record(id: "reg", exDays: -85, payDays: -80, amount: 0.25, frequency: 4),
+            ]
+        )
+        XCTAssertEqual(event.previousAmount, 0.25)
+        XCTAssertEqual(event.change, .increased)
+    }
+
+    func testNotificationBodyIncludesChange() async throws {
+        let event = try await syncUpcoming(
+            upcoming: record(id: "up", exDays: 5, payDays: 10, amount: 0.26),
+            priors: [record(id: "p", exDays: -85, payDays: -80, amount: 0.25)]
+        )
+        let body = NotificationManager.body(for: event)
+        XCTAssertTrue(body.contains("increased"), body)
+        XCTAssertTrue(body.contains("from"), body)
+    }
 }
 
 private final class MockDataSource: DividendDataSource {

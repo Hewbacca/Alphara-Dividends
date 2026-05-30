@@ -10,6 +10,13 @@ its payment date (or, if none is published, its ex-date) is today or later. So a
 that has already gone ex-dividend but hasn't paid yet still shows. The list is sorted by
 soonest payment date first.
 
+Each dividend shows how it compares to the company's previous **same-cadence** payment:
+**unchanged** (default color), **increased** (green ↑), or **cut** (red ↓), with **New**
+for anything lacking a comparable prior (first dividend, or only one-time specials, which
+are excluded from the comparison). Notifications include the same wording (e.g. "increased
+from $0.25"). The baseline comes from Polygon's per-ticker history in the same response we
+already fetch — no extra API calls and no separately stored history.
+
 ## Architecture
 
 - **SwiftUI + SwiftData**, iOS 17+.
