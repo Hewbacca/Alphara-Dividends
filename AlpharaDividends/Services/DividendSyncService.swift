@@ -36,7 +36,7 @@ struct DividendSyncService {
         let companies = force ? allCompanies : allCompanies.filter { isStale($0, now: now) }
         guard !companies.isEmpty else { return [] }
 
-        let today = Calendar.current.startOfDay(for: .now)
+        let today = DateUtil.startOfTodayUTC()
         var existingIDs = Set(try context.fetch(FetchDescriptor<DividendEvent>()).map(\.id))
         var newEvents: [DividendEvent] = []
         let total = companies.count

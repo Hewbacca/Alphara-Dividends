@@ -8,7 +8,7 @@ struct UpcomingDividendsView: View {
     @State private var isSyncing = false
 
     init() {
-        let today = Calendar.current.startOfDay(for: .now)
+        let today = DateUtil.startOfTodayUTC()
         // "Upcoming" = not yet paid: keep a dividend while its payment date (or, if
         // unknown, its ex-date) is today or later. This includes dividends that have
         // already gone ex-dividend but whose payment is still pending.

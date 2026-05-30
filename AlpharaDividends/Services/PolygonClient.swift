@@ -170,6 +170,18 @@ enum DateUtil {
         return f
     }()
 
+    /// UTC calendar so "today" aligns with the UTC-midnight dividend dates.
+    static let utcCalendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }()
+
+    /// Start of the current day in UTC — the threshold for "still upcoming".
+    static func startOfTodayUTC() -> Date {
+        utcCalendar.startOfDay(for: .now)
+    }
+
     static func parse(_ string: String?) -> Date? {
         guard let string, !string.isEmpty else { return nil }
         return formatter.date(from: string)

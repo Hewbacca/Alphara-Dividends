@@ -73,7 +73,18 @@ enum CurrencyFormat {
 }
 
 enum DateFormat {
+    /// Dividend dates are floating calendar dates parsed at UTC midnight, so they must be
+    /// formatted in UTC too — otherwise a date renders as the previous day in time zones
+    /// behind UTC (e.g. the US).
+    private static let display: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+        return f
+    }()
+
     static func medium(_ date: Date) -> String {
-        date.formatted(.dateTime.year().month(.abbreviated).day())
+        display.string(from: date)
     }
 }
