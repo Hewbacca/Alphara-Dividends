@@ -17,10 +17,15 @@ soonest payment date first.
   protocol so the provider (or a future server-backed push model) can be swapped without
   touching the UI.
   - Ticker search: `GET /v3/reference/tickers?search=` → ticker + company name.
-  - Dividends: **one market-wide** `GET /v3/reference/dividends?ex_dividend_date.gte=…&lte=…`
-    (paginated), filtered to the watchlist on-device. The number of API calls is
-    **independent of watchlist size** — essential for the free tier's 5 req/min limit and
-    the ~30s background budget. A 60-day look-ahead window keeps the payload to ~1-3 pages.
+  - Dividends: **one small request per ticker**
+    `GET /v3/reference/dividends?ticker={t}&order=desc&sort=ex_dividend_date&limit=8`,
+    keeping records where `(payDate ?? exDate) >= today`. Per-ticker is reliable: the
+    dividends endpoint has no multi-ticker filter, and a market-wide scan gets truncated by
+    Polygon's huge, month-clustered universe (which previously dropped real watchlist tickers
+    like V/TGT). To stay fast under the free tier's 5 req/min, a normal sync only re-checks
+    **stale** tickers (`TrackedCompany.lastCheckedAt` older than ~6h); **Settings → Refresh
+    all now** forces a full pass. Calls are paced by the shared limiter and results save
+    incrementally, so the list fills in progressively.
 - **Background monitoring:** `BGAppRefreshTask` (id `com.alphara.dividends.refresh`) runs
   the same sync engine as foreground refresh and fires **local** notifications for new
   events. New events are deduped by Polygon's stable dividend `id`. Background runs honor a

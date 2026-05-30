@@ -29,16 +29,11 @@ protocol DividendDataSource {
     /// Search for tickers by symbol or company name (ticker → company name matching).
     func searchTickers(query: String) async throws -> [TickerSearchResult]
 
-    /// Fetch ALL upcoming dividends whose ex-dividend date falls within `range`, then
-    /// keep only those whose ticker is in `tickers`.
+    /// Fetch the most recent dividends for a single ticker (newest first).
     ///
-    /// This issues a single market-wide query (paginated internally) rather than one
-    /// request per ticker, so the number of API calls is independent of watchlist size —
-    /// critical for staying under the provider's per-minute rate limit and fitting inside
-    /// the ~30s background-refresh budget. The implementation streams page-by-page and
-    /// discards non-matching records as it goes, so peak memory stays small.
-    func fetchUpcomingDividends(
-        in range: ClosedRange<Date>,
-        matching tickers: Set<String>
-    ) async throws -> [DividendRecord]
+    /// One small, complete request per ticker. This is immune to the truncation problems of
+    /// a market-wide scan (Polygon's universe is huge and clustered, and its dividends
+    /// endpoint has no multi-ticker filter), so every watchlist ticker reliably gets its
+    /// data. The caller decides which records are still "upcoming".
+    func fetchDividends(ticker: String) async throws -> [DividendRecord]
 }

@@ -16,24 +16,29 @@ final class DividendSyncServiceTests: XCTestCase {
         )
     }
 
-    private func record(id: String, daysFromNow: Int) -> DividendRecord {
+    private func record(id: String, ticker: String = "AAPL", daysFromNow: Int) -> DividendRecord {
         let date = Calendar.current.date(byAdding: .day, value: daysFromNow, to: .now)!
         return DividendRecord(
-            id: id, ticker: "AAPL", exDate: date,
+            id: id, ticker: ticker, exDate: date,
             payDate: nil, recordDate: nil, declarationDate: nil,
             cashAmount: 0.25, currency: "USD", frequency: 4
         )
     }
 
-    private func record(id: String, exDays: Int, payDays: Int) -> DividendRecord {
+    private func record(id: String, ticker: String = "AAPL", exDays: Int, payDays: Int) -> DividendRecord {
         let cal = Calendar.current
         return DividendRecord(
-            id: id, ticker: "AAPL",
+            id: id, ticker: ticker,
             exDate: cal.date(byAdding: .day, value: exDays, to: .now)!,
             payDate: cal.date(byAdding: .day, value: payDays, to: .now)!,
             recordDate: nil, declarationDate: nil,
             cashAmount: 0.25, currency: "USD", frequency: 4
         )
+    }
+
+    // Always-stale service so single/repeat syncs re-check every ticker.
+    private func service(_ mock: MockDataSource) -> DividendSyncService {
+        DividendSyncService(dataSource: mock, staleAfter: 0)
     }
 
     func testOnlyFutureUnseenEventsAreInserted() async throws {
@@ -42,12 +47,11 @@ final class DividendSyncServiceTests: XCTestCase {
         context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
 
         let mock = MockDataSource(records: [
-            record(id: "past", daysFromNow: -5),   // already ex-dividend -> ignored
+            record(id: "past", daysFromNow: -5),   // already ex-dividend, no pay date -> ignored
             record(id: "future", daysFromNow: 10), // upcoming -> inserted
         ])
-        let service = DividendSyncService(dataSource: mock)
 
-        let new = try await service.sync(context: context)
+        let new = try await service(mock).sync(context: context)
 
         XCTAssertEqual(new.map(\.id), ["future"])
         let stored = try context.fetch(FetchDescriptor<DividendEvent>())
@@ -60,65 +64,43 @@ final class DividendSyncServiceTests: XCTestCase {
         context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
 
         let mock = MockDataSource(records: [record(id: "future", daysFromNow: 10)])
-        let service = DividendSyncService(dataSource: mock)
+        let svc = service(mock)
 
-        _ = try await service.sync(context: context)
-        let secondRun = try await service.sync(context: context)
+        _ = try await svc.sync(context: context)
+        let secondRun = try await svc.sync(context: context)
 
         XCTAssertTrue(secondRun.isEmpty, "Known dividend ids must not be inserted twice")
-        let stored = try context.fetch(FetchDescriptor<DividendEvent>())
-        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DividendEvent>()).count, 1)
     }
 
-    func testWholeWatchlistCoveredInOneFetch() async throws {
+    func testEveryTickerIsQueried() async throws {
         let container = try makeContainer()
         let context = container.mainContext
-        // Many tracked companies...
         let tickers = (1...30).map { "T\($0)" }
         for t in tickers { context.insert(TrackedCompany(ticker: t, name: "Company \(t)")) }
 
-        // ...each with an upcoming dividend in a single market-wide result set.
-        let recs = tickers.map { t in
-            DividendRecord(id: "\(t)-div", ticker: t,
-                           exDate: Calendar.current.date(byAdding: .day, value: 20, to: .now)!,
-                           payDate: nil, recordDate: nil, declarationDate: nil,
-                           cashAmount: 0.1, currency: "USD", frequency: 4)
-        }
+        let recs = tickers.map { record(id: "\($0)-div", ticker: $0, daysFromNow: 20) }
         let mock = MockDataSource(records: recs)
-        let service = DividendSyncService(dataSource: mock)
 
-        let new = try await service.sync(context: context)
+        let new = try await service(mock).sync(context: context)
 
-        XCTAssertEqual(new.count, 30, "Every tracked ticker should be checked, not just the first few")
-        XCTAssertEqual(mock.fetchCallCount, 1, "Watchlist must be covered by a single market-wide call")
+        XCTAssertEqual(new.count, 30, "Every tracked ticker must be checked")
+        XCTAssertEqual(Set(mock.queriedTickers), Set(tickers), "Each ticker queried exactly once")
+        XCTAssertEqual(mock.queriedTickers.count, 30)
     }
 
-    func testDividendBeyondLookaheadWindowIsIgnored() async throws {
+    /// Regression for the V / TGT bug: ex-dividend already passed, but payment is still
+    /// upcoming, so it must appear.
+    func testPastExDateWithFuturePaymentIsShown() async throws {
         let container = try makeContainer()
         let context = container.mainContext
-        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
+        context.insert(TrackedCompany(ticker: "V", name: "Visa Inc."))
 
-        let mock = MockDataSource(records: [
-            record(id: "soon", daysFromNow: 30),  // inside 60-day window
-            record(id: "later", daysFromNow: 90), // outside window
-        ])
-        let service = DividendSyncService(dataSource: mock, lookaheadDays: 60)
+        // Mirrors Visa: ex-date 18 days ago, pays in 2 days.
+        let mock = MockDataSource(records: [record(id: "v-jun", ticker: "V", exDays: -18, payDays: 2)])
 
-        let new = try await service.sync(context: context)
-        XCTAssertEqual(new.map(\.id), ["soon"])
-    }
-
-    func testPastExDateButPendingPaymentIsIncluded() async throws {
-        let container = try makeContainer()
-        let context = container.mainContext
-        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
-
-        // Already went ex-dividend 5 days ago, but pays in 10 days — still upcoming.
-        let mock = MockDataSource(records: [record(id: "pending", exDays: -5, payDays: 10)])
-        let service = DividendSyncService(dataSource: mock)
-
-        let new = try await service.sync(context: context)
-        XCTAssertEqual(new.map(\.id), ["pending"])
+        let new = try await service(mock).sync(context: context)
+        XCTAssertEqual(new.map(\.id), ["v-jun"])
     }
 
     func testFullyPaidDividendIsExcluded() async throws {
@@ -128,9 +110,8 @@ final class DividendSyncServiceTests: XCTestCase {
 
         // Ex-dividend and payment both in the past — done, should not appear.
         let mock = MockDataSource(records: [record(id: "paid", exDays: -20, payDays: -2)])
-        let service = DividendSyncService(dataSource: mock)
 
-        let new = try await service.sync(context: context)
+        let new = try await service(mock).sync(context: context)
         XCTAssertTrue(new.isEmpty)
     }
 
@@ -140,32 +121,45 @@ final class DividendSyncServiceTests: XCTestCase {
         context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
 
         let mock = MockDataSource(records: [record(id: "q1", daysFromNow: 10)])
-        let service = DividendSyncService(dataSource: mock)
-        _ = try await service.sync(context: context)
+        let svc = service(mock)
+        _ = try await svc.sync(context: context)
 
-        // A new announcement appears in a later poll (within the look-ahead window).
+        // A new announcement appears in a later poll.
         mock.records.append(record(id: "q2", daysFromNow: 30))
-        let new = try await service.sync(context: context)
+        let new = try await svc.sync(context: context)
 
         XCTAssertEqual(new.map(\.id), ["q2"])
+    }
+
+    func testFreshTickersAreSkippedUnlessForced() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        // Checked just now -> fresh.
+        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc.", lastCheckedAt: .now))
+
+        let mock = MockDataSource(records: [record(id: "future", daysFromNow: 10)])
+        // 6-hour staleness window (the default).
+        let svc = DividendSyncService(dataSource: mock)
+
+        let skipped = try await svc.sync(context: context, force: false)
+        XCTAssertTrue(skipped.isEmpty, "A recently-checked ticker should be skipped")
+        XCTAssertEqual(mock.queriedTickers.count, 0)
+
+        let forced = try await svc.sync(context: context, force: true)
+        XCTAssertEqual(forced.map(\.id), ["future"], "force should re-check even fresh tickers")
+        XCTAssertEqual(mock.queriedTickers, ["AAPL"])
     }
 }
 
 private final class MockDataSource: DividendDataSource {
     var records: [DividendRecord]
-    /// Records counts as the data source sees them, to assert call-count independence.
-    private(set) var fetchCallCount = 0
+    private(set) var queriedTickers: [String] = []
     init(records: [DividendRecord]) { self.records = records }
 
     func searchTickers(query: String) async throws -> [TickerSearchResult] { [] }
 
-    func fetchUpcomingDividends(
-        in range: ClosedRange<Date>,
-        matching tickers: Set<String>
-    ) async throws -> [DividendRecord] {
-        fetchCallCount += 1
-        let wanted = Set(tickers.map { $0.uppercased() })
-        // Emulate the real client: market-wide rows filtered to the watchlist and window.
-        return records.filter { wanted.contains($0.ticker.uppercased()) && range.contains($0.exDate) }
+    func fetchDividends(ticker: String) async throws -> [DividendRecord] {
+        queriedTickers.append(ticker.uppercased())
+        return records.filter { $0.ticker.uppercased() == ticker.uppercased() }
     }
 }

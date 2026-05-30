@@ -5,80 +5,93 @@ import SwiftData
 ///
 /// Runs on the main actor and uses the container's main `ModelContext`, which keeps
 /// SwiftData access single-threaded and simple for a v1 app.
+///
+/// Strategy: one small, complete request **per ticker** (reliable, immune to market-wide
+/// truncation), paced by the shared rate limiter inside `PolygonClient`. A normal sync only
+/// re-checks **stale** tickers so it finishes quickly; `force: true` re-checks all.
 @MainActor
 struct DividendSyncService {
     let dataSource: DividendDataSource
 
-    /// How far ahead to look for upcoming dividends. Announcements rarely land earlier
-    /// than ~6 weeks before the ex-date, so a 60-day window keeps the market-wide payload
-    /// small (typically 1-3 pages) while still catching everything that's been declared.
-    let lookaheadDays: Int
+    /// A ticker checked more recently than this is skipped on a non-forced sync.
+    let staleAfter: TimeInterval
 
-    /// How far *back* to look on the ex-dividend date. A dividend can go ex-dividend up to
-    /// a few weeks before it pays, so we include recently-ex'd dividends to catch those
-    /// whose payment is still pending. 45 days comfortably covers typical ex→pay gaps.
-    let lookbackDays: Int
-
-    init(dataSource: DividendDataSource, lookaheadDays: Int = 45, lookbackDays: Int = 30) {
+    init(dataSource: DividendDataSource, staleAfter: TimeInterval = 6 * 60 * 60) {
         self.dataSource = dataSource
-        self.lookaheadDays = lookaheadDays
-        self.lookbackDays = lookbackDays
+        self.staleAfter = staleAfter
     }
 
-    /// Fetch upcoming dividends for the whole watchlist in a single market-wide query and
-    /// insert any not seen before.
+    /// Fetch dividends for each (stale, unless `force`) tracked company and insert any not
+    /// seen before. Saves incrementally per ticker so the UI fills in live and partial
+    /// progress survives interruption.
     /// - Returns: the newly-inserted events (each with `notified == false`).
     @discardableResult
-    func sync(context: ModelContext) async throws -> [DividendEvent] {
-        let companies = try context.fetch(FetchDescriptor<TrackedCompany>())
+    func sync(
+        context: ModelContext,
+        force: Bool = false,
+        onProgress: ((_ done: Int, _ total: Int) -> Void)? = nil
+    ) async throws -> [DividendEvent] {
+        let allCompanies = try context.fetch(FetchDescriptor<TrackedCompany>())
+        let now = Date()
+        let companies = force ? allCompanies : allCompanies.filter { isStale($0, now: now) }
         guard !companies.isEmpty else { return [] }
 
         let today = Calendar.current.startOfDay(for: .now)
-        let from = Calendar.current.date(byAdding: .day, value: -lookbackDays, to: today) ?? today
-        let through = Calendar.current.date(byAdding: .day, value: lookaheadDays, to: today) ?? today
-
-        // Ticker → company name (use the user's saved name for notifications/UI).
-        let nameByTicker = Dictionary(
-            companies.map { ($0.ticker.uppercased(), $0.name) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let tickers = Set(nameByTicker.keys)
-
-        let records = try await dataSource.fetchUpcomingDividends(in: from...through, matching: tickers)
-
-        let existing = try context.fetch(FetchDescriptor<DividendEvent>())
-        var existingIDs = Set(existing.map(\.id))
+        var existingIDs = Set(try context.fetch(FetchDescriptor<DividendEvent>()).map(\.id))
         var newEvents: [DividendEvent] = []
+        let total = companies.count
 
-        // Keep a dividend while it is not yet paid (payment today/future), or — if no
-        // payment date is published — while its ex-date is still upcoming.
-        for record in records where (record.payDate ?? record.exDate) >= today {
-            guard !existingIDs.contains(record.id) else { continue }
-            let event = DividendEvent(
-                id: record.id,
-                ticker: record.ticker,
-                companyName: nameByTicker[record.ticker.uppercased()] ?? record.ticker,
-                exDate: record.exDate,
-                payDate: record.payDate,
-                recordDate: record.recordDate,
-                declarationDate: record.declarationDate,
-                cashAmount: record.cashAmount,
-                currency: record.currency,
-                frequency: record.frequency
-            )
-            context.insert(event)
-            existingIDs.insert(record.id)
-            newEvents.append(event)
+        for (index, company) in companies.enumerated() {
+            try Task.checkCancellation() // honor the background-task budget
+
+            let records: [DividendRecord]
+            do {
+                records = try await dataSource.fetchDividends(ticker: company.ticker)
+            } catch let error as PolygonError where error.isFatalForAllTickers {
+                throw error // missing key affects every ticker — surface it
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue // transient: skip this ticker, leave it stale for a retry
+            }
+
+            // Keep a dividend while it is not yet paid (payment today/future), or — if no
+            // payment date is published — while its ex-date is still upcoming.
+            for record in records where (record.payDate ?? record.exDate) >= today {
+                guard !existingIDs.contains(record.id) else { continue }
+                let event = DividendEvent(
+                    id: record.id,
+                    ticker: record.ticker,
+                    companyName: company.name,
+                    exDate: record.exDate,
+                    payDate: record.payDate,
+                    recordDate: record.recordDate,
+                    declarationDate: record.declarationDate,
+                    cashAmount: record.cashAmount,
+                    currency: record.currency,
+                    frequency: record.frequency
+                )
+                context.insert(event)
+                existingIDs.insert(record.id)
+                newEvents.append(event)
+            }
+
+            company.lastCheckedAt = now
+            if context.hasChanges { try context.save() } // incremental: list updates live
+            onProgress?(index + 1, total)
         }
 
-        if context.hasChanges { try context.save() }
         return newEvents
     }
 
     /// Sync, then fire a local notification for each new event and mark it notified.
     @discardableResult
-    func syncAndNotify(context: ModelContext) async throws -> [DividendEvent] {
-        let newEvents = try await sync(context: context)
+    func syncAndNotify(
+        context: ModelContext,
+        force: Bool = false,
+        onProgress: ((_ done: Int, _ total: Int) -> Void)? = nil
+    ) async throws -> [DividendEvent] {
+        let newEvents = try await sync(context: context, force: force, onProgress: onProgress)
         let toNotify = newEvents.filter { !$0.notified }
         guard !toNotify.isEmpty else { return newEvents }
 
@@ -86,5 +99,20 @@ struct DividendSyncService {
         for event in toNotify { event.notified = true }
         if context.hasChanges { try context.save() }
         return newEvents
+    }
+
+    private func isStale(_ company: TrackedCompany, now: Date) -> Bool {
+        guard let last = company.lastCheckedAt else { return true }
+        return now.timeIntervalSince(last) >= staleAfter
+    }
+}
+
+private extension PolygonError {
+    /// Errors that mean every ticker would fail, so we should stop rather than loop.
+    var isFatalForAllTickers: Bool {
+        switch self {
+        case .missingAPIKey, .rateLimited: return true
+        case .http, .invalidResponse: return false
+        }
     }
 }

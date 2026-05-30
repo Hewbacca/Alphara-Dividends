@@ -34,7 +34,7 @@ struct SettingsView: View {
                         Task { await syncNow() }
                     } label: {
                         HStack {
-                            Text("Refresh now")
+                            Text("Refresh all now")
                             Spacer()
                             if isSyncing { ProgressView() }
                         }
@@ -46,7 +46,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Dividends")
                 } footer: {
-                    Text("Checks are paced to stay within the free tier's 5 requests/minute, so a refresh can take up to a minute. It keeps running if you switch tabs.")
+                    Text("Re-checks every ticker. Calls are paced to the free tier's 5/minute, so a full refresh of a large watchlist can take several minutes — results appear as they load, and it keeps running if you switch tabs. Pull-to-refresh on Upcoming only re-checks tickers that haven't been checked recently.")
                 }
 
                 Section {
@@ -110,7 +110,9 @@ struct SettingsView: View {
         defer { isSyncing = false }
         let service = DividendSyncService(dataSource: PolygonClient())
         do {
-            let new = try await service.syncAndNotify(context: context)
+            let new = try await service.syncAndNotify(context: context, force: true) { done, total in
+                syncMessage = "Checking \(done) of \(total)…"
+            }
             syncMessage = new.isEmpty ? "No new dividends found." : "Found \(new.count) new dividend(s)."
         } catch {
             syncMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

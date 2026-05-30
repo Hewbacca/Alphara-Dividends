@@ -57,58 +57,35 @@ struct PolygonClient: DividendDataSource {
         }
     }
 
-    func fetchUpcomingDividends(
-        in range: ClosedRange<Date>,
-        matching tickers: Set<String>
-    ) async throws -> [DividendRecord] {
-        guard !tickers.isEmpty else { return [] }
-        let wanted = Set(tickers.map { $0.uppercased() })
+    func fetchDividends(ticker: String) async throws -> [DividendRecord] {
+        let symbol = ticker.uppercased()
+        await rateLimiter?.waitForSlot()
 
-        // One market-wide query bounded by ex-dividend date, sorted ascending, paginated.
         var components = URLComponents(url: baseURL.appendingPathComponent("/v3/reference/dividends"),
                                        resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "ex_dividend_date.gte", value: DateUtil.apiString(range.lowerBound)),
-            URLQueryItem(name: "ex_dividend_date.lte", value: DateUtil.apiString(range.upperBound)),
-            URLQueryItem(name: "order", value: "asc"),
+            URLQueryItem(name: "ticker", value: symbol),
+            URLQueryItem(name: "order", value: "desc"),
             URLQueryItem(name: "sort", value: "ex_dividend_date"),
-            URLQueryItem(name: "limit", value: "1000"),
+            URLQueryItem(name: "limit", value: "8"),
         ]
-        guard var nextURL = components.url else { throw PolygonError.invalidResponse }
+        guard let url = components.url else { throw PolygonError.invalidResponse }
 
-        var matched: [DividendRecord] = []
-        var pages = 0
-        let maxPages = 10 // hard safety cap (throttled, so each page costs ~13s)
-
-        while pages < maxPages {
-            try Task.checkCancellation()
-            await rateLimiter?.waitForSlot()
-
-            let response: DividendsResponse = try await get(url: nextURL)
-            pages += 1
-
-            for dto in response.results ?? [] {
-                guard let ticker = dto.ticker?.uppercased(), wanted.contains(ticker) else { continue }
-                guard let exDate = DateUtil.parse(dto.ex_dividend_date) else { continue }
-                matched.append(DividendRecord(
-                    id: dto.id ?? "\(ticker)-\(dto.ex_dividend_date ?? "")",
-                    ticker: ticker,
-                    exDate: exDate,
-                    payDate: DateUtil.parse(dto.pay_date),
-                    recordDate: DateUtil.parse(dto.record_date),
-                    declarationDate: DateUtil.parse(dto.declaration_date),
-                    cashAmount: dto.cash_amount ?? 0,
-                    currency: dto.currency ?? "USD",
-                    frequency: dto.frequency ?? 0
-                ))
-            }
-
-            // Follow pagination if present (Polygon's next_url is pre-built but unauthenticated).
-            guard let next = response.next_url, let url = URL(string: next) else { break }
-            nextURL = url
+        let response: DividendsResponse = try await get(url: url)
+        return (response.results ?? []).compactMap { dto in
+            guard let exDate = DateUtil.parse(dto.ex_dividend_date) else { return nil }
+            return DividendRecord(
+                id: dto.id ?? "\(symbol)-\(dto.ex_dividend_date ?? "")",
+                ticker: symbol,
+                exDate: exDate,
+                payDate: DateUtil.parse(dto.pay_date),
+                recordDate: DateUtil.parse(dto.record_date),
+                declarationDate: DateUtil.parse(dto.declaration_date),
+                cashAmount: dto.cash_amount ?? 0,
+                currency: dto.currency ?? "USD",
+                frequency: dto.frequency ?? 0
+            )
         }
-
-        return matched
     }
 
     // MARK: - Networking
