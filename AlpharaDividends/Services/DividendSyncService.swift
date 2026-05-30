@@ -19,7 +19,7 @@ struct DividendSyncService {
     /// whose payment is still pending. 45 days comfortably covers typical ex→pay gaps.
     let lookbackDays: Int
 
-    init(dataSource: DividendDataSource, lookaheadDays: Int = 60, lookbackDays: Int = 45) {
+    init(dataSource: DividendDataSource, lookaheadDays: Int = 45, lookbackDays: Int = 30) {
         self.dataSource = dataSource
         self.lookaheadDays = lookaheadDays
         self.lookbackDays = lookbackDays

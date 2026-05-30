@@ -144,7 +144,7 @@ final class DividendSyncServiceTests: XCTestCase {
         _ = try await service.sync(context: context)
 
         // A new announcement appears in a later poll (within the look-ahead window).
-        mock.records.append(record(id: "q2", daysFromNow: 45))
+        mock.records.append(record(id: "q2", daysFromNow: 30))
         let new = try await service.sync(context: context)
 
         XCTAssertEqual(new.map(\.id), ["q2"])

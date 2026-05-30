@@ -27,8 +27,10 @@ struct PolygonClient: DividendDataSource {
     private let rateLimiter: RateLimiter?
     private let baseURL = URL(string: "https://api.polygon.io")!
 
-    /// `rateLimiter` is applied to the dividends endpoint only (used by background sync).
-    init(session: URLSession = .shared, rateLimiter: RateLimiter? = nil) {
+    /// The dividends endpoint is always throttled through the shared limiter so foreground
+    /// and background never collectively exceed the free tier's 5 requests/minute.
+    /// (Interactive ticker search is intentionally NOT throttled; it's debounced instead.)
+    init(session: URLSession = .shared, rateLimiter: RateLimiter? = .polygonShared) {
         self.session = session
         self.rateLimiter = rateLimiter
     }
@@ -76,7 +78,7 @@ struct PolygonClient: DividendDataSource {
 
         var matched: [DividendRecord] = []
         var pages = 0
-        let maxPages = 20 // hard safety cap
+        let maxPages = 10 // hard safety cap (throttled, so each page costs ~13s)
 
         while pages < maxPages {
             try Task.checkCancellation()
@@ -124,27 +126,33 @@ struct PolygonClient: DividendDataSource {
         items.append(URLQueryItem(name: "apiKey", value: apiKey))
         components.queryItems = items
 
-        guard let url = components.url else { throw PolygonError.invalidResponse }
-        var request = URLRequest(url: url)
+        guard let requestURL = components.url else { throw PolygonError.invalidResponse }
+        var request = URLRequest(url: requestURL)
         request.timeoutInterval = 20
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw PolygonError.invalidResponse }
+        // Retry a transient 429 a couple of times (honoring Retry-After) before giving up,
+        // so a brief overlap with another call doesn't fail the whole sync.
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            try Task.checkCancellation()
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw PolygonError.invalidResponse }
 
-        switch http.statusCode {
-        case 200...299:
-            do {
-                return try JSONDecoder().decode(T.self, from: data)
-            } catch {
-                throw PolygonError.invalidResponse
+            switch http.statusCode {
+            case 200...299:
+                do { return try JSONDecoder().decode(T.self, from: data) }
+                catch { throw PolygonError.invalidResponse }
+            case 401, 403:
+                throw PolygonError.missingAPIKey
+            case 429:
+                guard attempt < maxAttempts else { throw PolygonError.rateLimited }
+                let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Double.init) ?? 15
+                try await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
+            default:
+                throw PolygonError.http(http.statusCode)
             }
-        case 401, 403:
-            throw PolygonError.missingAPIKey
-        case 429:
-            throw PolygonError.rateLimited
-        default:
-            throw PolygonError.http(http.statusCode)
         }
+        throw PolygonError.rateLimited
     }
 }
 

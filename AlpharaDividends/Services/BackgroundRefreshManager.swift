@@ -10,9 +10,6 @@ import SwiftData
 enum BackgroundRefreshManager {
     static let taskIdentifier = "com.alphara.dividends.refresh"
 
-    /// Polygon free tier = 5 req/min, so space dividend calls ~12.5s apart.
-    private static let throttleInterval: TimeInterval = 12.5
-
     private static var container: ModelContainer?
 
     /// Register the task handler. Must be called before the app finishes launching.
@@ -46,9 +43,9 @@ enum BackgroundRefreshManager {
                 return
             }
 
-            let service = DividendSyncService(
-                dataSource: PolygonClient(rateLimiter: RateLimiter(minInterval: throttleInterval))
-            )
+            // Uses the shared rate limiter (default) so foreground + background never
+            // collectively exceed the free tier's request budget.
+            let service = DividendSyncService(dataSource: PolygonClient())
             do {
                 _ = try await service.syncAndNotify(context: container.mainContext)
                 task.setTaskCompleted(success: true)

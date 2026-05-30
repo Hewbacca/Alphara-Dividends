@@ -29,7 +29,7 @@ struct SettingsView: View {
                     Text("Your key is stored in the device Keychain. The free tier allows 5 requests/minute with end-of-day data.")
                 }
 
-                Section("Dividends") {
+                Section {
                     Button {
                         Task { await syncNow() }
                     } label: {
@@ -43,6 +43,10 @@ struct SettingsView: View {
                     if let syncMessage {
                         Text(syncMessage).font(.footnote).foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text("Dividends")
+                } footer: {
+                    Text("Checks are paced to stay within the free tier's 5 requests/minute, so a refresh can take up to a minute. It keeps running if you switch tabs.")
                 }
 
                 Section {

@@ -13,6 +13,11 @@ actor RateLimiter {
         self.minInterval = minInterval
     }
 
+    /// Process-wide limiter shared by every Polygon dividends request (foreground AND
+    /// background) so the combined call rate stays under the free tier's 5/minute.
+    /// 13s spacing ≈ 4.6 req/min, leaving a little headroom for the occasional search call.
+    static let polygonShared = RateLimiter(minInterval: 13)
+
     /// Suspends until enough time has passed since the previous slot.
     func waitForSlot() async {
         if let last = lastCall {
