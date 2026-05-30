@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var notifStatus: UNAuthorizationStatus = .notDetermined
     @State private var isSyncing = false
     @State private var syncMessage: String?
+    @AppStorage(AppSettings.backgroundWifiOnlyKey) private var backgroundWifiOnly = true
 
     var body: some View {
         NavigationStack {
@@ -42,6 +43,14 @@ struct SettingsView: View {
                     if let syncMessage {
                         Text(syncMessage).font(.footnote).foregroundStyle(.secondary)
                     }
+                }
+
+                Section {
+                    Toggle("Background refresh on Wi-Fi only", isOn: $backgroundWifiOnly)
+                } header: {
+                    Text("Background")
+                } footer: {
+                    Text("When on, automatic background checks are skipped on cellular to save data. “Refresh now” and pull-to-refresh always work regardless of this setting.")
                 }
 
                 Section {

@@ -59,6 +59,44 @@ final class DividendSyncServiceTests: XCTestCase {
         XCTAssertEqual(stored.count, 1)
     }
 
+    func testWholeWatchlistCoveredInOneFetch() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        // Many tracked companies...
+        let tickers = (1...30).map { "T\($0)" }
+        for t in tickers { context.insert(TrackedCompany(ticker: t, name: "Company \(t)")) }
+
+        // ...each with an upcoming dividend in a single market-wide result set.
+        let recs = tickers.map { t in
+            DividendRecord(id: "\(t)-div", ticker: t,
+                           exDate: Calendar.current.date(byAdding: .day, value: 20, to: .now)!,
+                           payDate: nil, recordDate: nil, declarationDate: nil,
+                           cashAmount: 0.1, currency: "USD", frequency: 4)
+        }
+        let mock = MockDataSource(records: recs)
+        let service = DividendSyncService(dataSource: mock)
+
+        let new = try await service.sync(context: context)
+
+        XCTAssertEqual(new.count, 30, "Every tracked ticker should be checked, not just the first few")
+        XCTAssertEqual(mock.fetchCallCount, 1, "Watchlist must be covered by a single market-wide call")
+    }
+
+    func testDividendBeyondLookaheadWindowIsIgnored() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
+
+        let mock = MockDataSource(records: [
+            record(id: "soon", daysFromNow: 30),  // inside 60-day window
+            record(id: "later", daysFromNow: 90), // outside window
+        ])
+        let service = DividendSyncService(dataSource: mock, lookaheadDays: 60)
+
+        let new = try await service.sync(context: context)
+        XCTAssertEqual(new.map(\.id), ["soon"])
+    }
+
     func testNewlyAnnouncedDividendIsDetected() async throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -68,8 +106,8 @@ final class DividendSyncServiceTests: XCTestCase {
         let service = DividendSyncService(dataSource: mock)
         _ = try await service.sync(context: context)
 
-        // A new announcement appears in a later poll.
-        mock.records.append(record(id: "q2", daysFromNow: 100))
+        // A new announcement appears in a later poll (within the look-ahead window).
+        mock.records.append(record(id: "q2", daysFromNow: 45))
         let new = try await service.sync(context: context)
 
         XCTAssertEqual(new.map(\.id), ["q2"])
@@ -78,11 +116,19 @@ final class DividendSyncServiceTests: XCTestCase {
 
 private final class MockDataSource: DividendDataSource {
     var records: [DividendRecord]
+    /// Records counts as the data source sees them, to assert call-count independence.
+    private(set) var fetchCallCount = 0
     init(records: [DividendRecord]) { self.records = records }
 
     func searchTickers(query: String) async throws -> [TickerSearchResult] { [] }
 
-    func fetchUpcomingDividends(ticker: String, from: Date) async throws -> [DividendRecord] {
-        records
+    func fetchUpcomingDividends(
+        in range: ClosedRange<Date>,
+        matching tickers: Set<String>
+    ) async throws -> [DividendRecord] {
+        fetchCallCount += 1
+        let wanted = Set(tickers.map { $0.uppercased() })
+        // Emulate the real client: market-wide rows filtered to the watchlist and window.
+        return records.filter { wanted.contains($0.ticker.uppercased()) && range.contains($0.exDate) }
     }
 }

@@ -40,6 +40,12 @@ enum BackgroundRefreshManager {
         }
 
         let work = Task { @MainActor in
+            // Respect the user's "Wi-Fi only" preference for unattended background runs.
+            if AppSettings.backgroundWifiOnly, await !NetworkMonitor.isUnrestricted() {
+                task.setTaskCompleted(success: true) // try again at the next opportunity
+                return
+            }
+
             let service = DividendSyncService(
                 dataSource: PolygonClient(rateLimiter: RateLimiter(minInterval: throttleInterval))
             )

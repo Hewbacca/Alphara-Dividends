@@ -48,50 +48,81 @@ struct PolygonClient: DividendDataSource {
             URLQueryItem(name: "limit", value: "20"),
         ]
 
-        let response: TickersResponse = try await get(components)
+        guard let url = components.url else { throw PolygonError.invalidResponse }
+        let response: TickersResponse = try await get(url: url)
         return (response.results ?? []).map {
             TickerSearchResult(ticker: $0.ticker, name: $0.name ?? $0.ticker)
         }
     }
 
-    func fetchUpcomingDividends(ticker: String, from: Date) async throws -> [DividendRecord] {
-        await rateLimiter?.waitForSlot()
+    func fetchUpcomingDividends(
+        in range: ClosedRange<Date>,
+        matching tickers: Set<String>
+    ) async throws -> [DividendRecord] {
+        guard !tickers.isEmpty else { return [] }
+        let wanted = Set(tickers.map { $0.uppercased() })
 
+        // One market-wide query bounded by ex-dividend date, sorted ascending, paginated.
         var components = URLComponents(url: baseURL.appendingPathComponent("/v3/reference/dividends"),
                                        resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "ticker", value: ticker.uppercased()),
-            URLQueryItem(name: "ex_dividend_date.gte", value: DateUtil.apiString(from)),
+            URLQueryItem(name: "ex_dividend_date.gte", value: DateUtil.apiString(range.lowerBound)),
+            URLQueryItem(name: "ex_dividend_date.lte", value: DateUtil.apiString(range.upperBound)),
             URLQueryItem(name: "order", value: "asc"),
             URLQueryItem(name: "sort", value: "ex_dividend_date"),
-            URLQueryItem(name: "limit", value: "50"),
+            URLQueryItem(name: "limit", value: "1000"),
         ]
+        guard var nextURL = components.url else { throw PolygonError.invalidResponse }
 
-        let response: DividendsResponse = try await get(components)
-        return (response.results ?? []).compactMap { dto in
-            guard let exDate = DateUtil.parse(dto.ex_dividend_date) else { return nil }
-            return DividendRecord(
-                id: dto.id ?? "\(ticker.uppercased())-\(dto.ex_dividend_date ?? "")",
-                ticker: ticker.uppercased(),
-                exDate: exDate,
-                payDate: DateUtil.parse(dto.pay_date),
-                recordDate: DateUtil.parse(dto.record_date),
-                declarationDate: DateUtil.parse(dto.declaration_date),
-                cashAmount: dto.cash_amount ?? 0,
-                currency: dto.currency ?? "USD",
-                frequency: dto.frequency ?? 0
-            )
+        var matched: [DividendRecord] = []
+        var pages = 0
+        let maxPages = 20 // hard safety cap
+
+        while pages < maxPages {
+            try Task.checkCancellation()
+            await rateLimiter?.waitForSlot()
+
+            let response: DividendsResponse = try await get(url: nextURL)
+            pages += 1
+
+            for dto in response.results ?? [] {
+                guard let ticker = dto.ticker?.uppercased(), wanted.contains(ticker) else { continue }
+                guard let exDate = DateUtil.parse(dto.ex_dividend_date) else { continue }
+                matched.append(DividendRecord(
+                    id: dto.id ?? "\(ticker)-\(dto.ex_dividend_date ?? "")",
+                    ticker: ticker,
+                    exDate: exDate,
+                    payDate: DateUtil.parse(dto.pay_date),
+                    recordDate: DateUtil.parse(dto.record_date),
+                    declarationDate: DateUtil.parse(dto.declaration_date),
+                    cashAmount: dto.cash_amount ?? 0,
+                    currency: dto.currency ?? "USD",
+                    frequency: dto.frequency ?? 0
+                ))
+            }
+
+            // Follow pagination if present (Polygon's next_url is pre-built but unauthenticated).
+            guard let next = response.next_url, let url = URL(string: next) else { break }
+            nextURL = url
         }
+
+        return matched
     }
 
     // MARK: - Networking
 
-    private func get<T: Decodable>(_ components: URLComponents) async throws -> T {
+    private func get<T: Decodable>(url: URL) async throws -> T {
         guard let apiKey = KeychainStore.apiKey, !apiKey.isEmpty else {
             throw PolygonError.missingAPIKey
         }
-        var components = components
-        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "apiKey", value: apiKey)]
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw PolygonError.invalidResponse
+        }
+        // Append apiKey (next_url from pagination arrives without it).
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == "apiKey" }
+        items.append(URLQueryItem(name: "apiKey", value: apiKey))
+        components.queryItems = items
 
         guard let url = components.url else { throw PolygonError.invalidResponse }
         var request = URLRequest(url: url)
@@ -129,8 +160,10 @@ private struct TickersResponse: Decodable {
 
 private struct DividendsResponse: Decodable {
     let results: [DividendDTO]?
+    let next_url: String?
     struct DividendDTO: Decodable {
         let id: String?
+        let ticker: String?
         let cash_amount: Double?
         let currency: String?
         let declaration_date: String?

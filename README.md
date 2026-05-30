@@ -13,23 +13,31 @@ amount.
   protocol so the provider (or a future server-backed push model) can be swapped without
   touching the UI.
   - Ticker search: `GET /v3/reference/tickers?search=` → ticker + company name.
-  - Dividends: `GET /v3/reference/dividends?ticker=…&ex_dividend_date.gte=today` →
-    ex-date, pay-date, record-date, declaration-date, cash amount, frequency.
+  - Dividends: **one market-wide** `GET /v3/reference/dividends?ex_dividend_date.gte=…&lte=…`
+    (paginated), filtered to the watchlist on-device. The number of API calls is
+    **independent of watchlist size** — essential for the free tier's 5 req/min limit and
+    the ~30s background budget. A 60-day look-ahead window keeps the payload to ~1-3 pages.
 - **Background monitoring:** `BGAppRefreshTask` (id `com.alphara.dividends.refresh`) runs
   the same sync engine as foreground refresh and fires **local** notifications for new
-  events. New events are deduped by Polygon's stable dividend `id`.
+  events. New events are deduped by Polygon's stable dividend `id`. Background runs honor a
+  **Wi-Fi-only** preference (Settings) and are skipped on cellular when enabled.
 - **API key:** entered in Settings, stored in the **Keychain**. No shared key is embedded
   in the binary — each user supplies their own free Polygon key.
+- **Watchlist persistence:** SwiftData persists locally across app *updates*; the watchlist
+  is additionally mirrored to **iCloud key-value storage** (`NSUbiquitousKeyValueStore`) so
+  it survives *reinstalls* and appears on the user's other devices. Requires the iCloud
+  **Key-value storage** capability (see Build & run).
 
 ### Source layout
 ```
 AlpharaDividends/
-  AlpharaDividendsApp.swift     App entry: SwiftData container, BG task registration, notif auth
+  AlpharaDividendsApp.swift     App entry: SwiftData container, BG task registration, notif auth, iCloud restore
   Models/                       TrackedCompany, DividendEvent (@Model)
   Services/                     PolygonClient, DividendSyncService, BackgroundRefreshManager,
-                                NotificationManager, RateLimiter, KeychainStore, DividendDataSource
+                                NotificationManager, RateLimiter, KeychainStore, DividendDataSource,
+                                NetworkMonitor, AppSettings, WatchlistBackup
   Views/                        RootView, UpcomingDividendsView, WatchlistView, AddTickerView, SettingsView
-AlpharaDividendsTests/          DividendSyncService dedupe / detection tests
+AlpharaDividendsTests/          DividendSyncService dedupe / detection / coverage tests
 ```
 
 ## Build & run
@@ -45,6 +53,15 @@ open AlpharaDividends.xcodeproj
 
 Then in Xcode: select the `AlpharaDividends` scheme, choose an iOS 17+ Simulator or your
 device, and Run. (Building/running requires full **Xcode**, not just Command Line Tools.)
+
+> **Re-run `xcodegen generate` after pulling changes** that add files (XcodeGen uses
+> explicit file references, so new sources/assets won't appear in the project otherwise).
+
+**Signing / capability:** set your Team for signing, and enable the **iCloud → Key-value
+storage** capability for the app target (the `com.apple.developer.ubiquity-kvstore-identifier`
+entitlement is already in `AlpharaDividends.entitlements`). Without it the app still runs;
+the watchlist just won't back up to iCloud. The icon, background modes, and notifications
+need no extra setup.
 
 ### First-time setup in the app
 1. **Settings → Polygon API key:** paste a free key from

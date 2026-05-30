@@ -94,6 +94,7 @@ struct AddTickerView: View {
         guard !isTracked(result.ticker) else { return }
         context.insert(TrackedCompany(ticker: result.ticker, name: result.name))
         try? context.save()
+        WatchlistBackup.shared.backupCurrent()
         dismiss()
     }
 }

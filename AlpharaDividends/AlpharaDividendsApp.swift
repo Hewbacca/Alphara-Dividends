@@ -19,7 +19,10 @@ struct AlpharaDividendsApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .task { await NotificationManager.requestAuthorization() }
+                .task {
+                    WatchlistBackup.shared.configure(context: container.mainContext)
+                    await NotificationManager.requestAuthorization()
+                }
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in

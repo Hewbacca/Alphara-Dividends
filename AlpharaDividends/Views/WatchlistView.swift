@@ -55,5 +55,6 @@ struct WatchlistView: View {
             context.delete(company)
         }
         try? context.save()
+        WatchlistBackup.shared.backupCurrent()
     }
 }

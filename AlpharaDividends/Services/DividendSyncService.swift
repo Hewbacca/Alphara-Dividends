@@ -9,11 +9,18 @@ import SwiftData
 struct DividendSyncService {
     let dataSource: DividendDataSource
 
-    init(dataSource: DividendDataSource) {
+    /// How far ahead to look for upcoming dividends. Announcements rarely land earlier
+    /// than ~6 weeks before the ex-date, so a 60-day window keeps the market-wide payload
+    /// small (typically 1-3 pages) while still catching everything that's been declared.
+    let lookaheadDays: Int
+
+    init(dataSource: DividendDataSource, lookaheadDays: Int = 60) {
         self.dataSource = dataSource
+        self.lookaheadDays = lookaheadDays
     }
 
-    /// Fetch dividends for every tracked company and insert any not seen before.
+    /// Fetch upcoming dividends for the whole watchlist in a single market-wide query and
+    /// insert any not seen before.
     /// - Returns: the newly-inserted events (each with `notified == false`).
     @discardableResult
     func sync(context: ModelContext) async throws -> [DividendEvent] {
@@ -21,49 +28,38 @@ struct DividendSyncService {
         guard !companies.isEmpty else { return [] }
 
         let today = Calendar.current.startOfDay(for: .now)
+        let through = Calendar.current.date(byAdding: .day, value: lookaheadDays, to: today) ?? today
+
+        // Ticker → company name (use the user's saved name for notifications/UI).
+        let nameByTicker = Dictionary(
+            companies.map { ($0.ticker.uppercased(), $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let tickers = Set(nameByTicker.keys)
+
+        let records = try await dataSource.fetchUpcomingDividends(in: today...through, matching: tickers)
+
         let existing = try context.fetch(FetchDescriptor<DividendEvent>())
         var existingIDs = Set(existing.map(\.id))
-
         var newEvents: [DividendEvent] = []
 
-        for company in companies {
-            if Task.isCancelled { break }
-
-            let records: [DividendRecord]
-            do {
-                records = try await dataSource.fetchUpcomingDividends(ticker: company.ticker, from: today)
-            } catch let error as PolygonError {
-                // A missing key or rate limit affects every ticker — surface it.
-                switch error {
-                case .missingAPIKey, .rateLimited:
-                    throw error
-                default:
-                    continue // transient: skip this ticker, keep going
-                }
-            } catch is CancellationError {
-                break
-            } catch {
-                continue
-            }
-
-            for record in records where record.exDate >= today {
-                guard !existingIDs.contains(record.id) else { continue }
-                let event = DividendEvent(
-                    id: record.id,
-                    ticker: record.ticker,
-                    companyName: company.name,
-                    exDate: record.exDate,
-                    payDate: record.payDate,
-                    recordDate: record.recordDate,
-                    declarationDate: record.declarationDate,
-                    cashAmount: record.cashAmount,
-                    currency: record.currency,
-                    frequency: record.frequency
-                )
-                context.insert(event)
-                existingIDs.insert(record.id)
-                newEvents.append(event)
-            }
+        for record in records where record.exDate >= today {
+            guard !existingIDs.contains(record.id) else { continue }
+            let event = DividendEvent(
+                id: record.id,
+                ticker: record.ticker,
+                companyName: nameByTicker[record.ticker.uppercased()] ?? record.ticker,
+                exDate: record.exDate,
+                payDate: record.payDate,
+                recordDate: record.recordDate,
+                declarationDate: record.declarationDate,
+                cashAmount: record.cashAmount,
+                currency: record.currency,
+                frequency: record.frequency
+            )
+            context.insert(event)
+            existingIDs.insert(record.id)
+            newEvents.append(event)
         }
 
         if context.hasChanges { try context.save() }

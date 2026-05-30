@@ -29,6 +29,16 @@ protocol DividendDataSource {
     /// Search for tickers by symbol or company name (ticker → company name matching).
     func searchTickers(query: String) async throws -> [TickerSearchResult]
 
-    /// Fetch dividends for a ticker with an ex-dividend date on or after `from`.
-    func fetchUpcomingDividends(ticker: String, from: Date) async throws -> [DividendRecord]
+    /// Fetch ALL upcoming dividends whose ex-dividend date falls within `range`, then
+    /// keep only those whose ticker is in `tickers`.
+    ///
+    /// This issues a single market-wide query (paginated internally) rather than one
+    /// request per ticker, so the number of API calls is independent of watchlist size —
+    /// critical for staying under the provider's per-minute rate limit and fitting inside
+    /// the ~30s background-refresh budget. The implementation streams page-by-page and
+    /// discards non-matching records as it goes, so peak memory stays small.
+    func fetchUpcomingDividends(
+        in range: ClosedRange<Date>,
+        matching tickers: Set<String>
+    ) async throws -> [DividendRecord]
 }
