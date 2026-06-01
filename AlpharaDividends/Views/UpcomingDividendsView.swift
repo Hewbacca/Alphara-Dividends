@@ -24,6 +24,14 @@ struct UpcomingDividendsView: View {
         events.sorted { ($0.payDate ?? $0.exDate) < ($1.payDate ?? $1.exDate) }
     }
 
+    /// Row highlight: green when it pays today, blue when it goes ex-dividend today.
+    /// (Payment-day takes precedence if both somehow fall today.)
+    private func rowBackground(for event: DividendEvent) -> Color? {
+        if let pay = event.payDate, DateUtil.isTodayUTC(pay) { return .green.opacity(0.18) }
+        if DateUtil.isTodayUTC(event.exDate) { return .blue.opacity(0.18) }
+        return nil
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -36,6 +44,7 @@ struct UpcomingDividendsView: View {
                 } else {
                     List(sortedEvents) { event in
                         DividendRow(event: event)
+                            .listRowBackground(rowBackground(for: event))
                     }
                 }
             }

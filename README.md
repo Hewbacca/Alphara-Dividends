@@ -17,6 +17,13 @@ are excluded from the comparison). Notifications include the same wording (e.g. 
 from $0.25"). The baseline comes from Polygon's per-ticker history in the same response we
 already fetch — no extra API calls and no separately stored history.
 
+Rows are tinted by date status: **green** when the dividend pays today, **blue** when it goes
+ex-dividend today (dates compared in UTC). On the pay date, a separate **"paid today"**
+notification fires (independent of the announcement alert) — at most once per dividend per
+day (`DividendEvent.lastPaydayNotifiedOn`), and multiple dividends paying the same day are
+combined into one notification (stable `payday-{date}` identifier). This payday scan is
+network-free and runs on launch, on foreground, and in the background.
+
 ## Architecture
 
 - **SwiftUI + SwiftData**, iOS 17+.

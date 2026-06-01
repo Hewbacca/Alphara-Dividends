@@ -37,6 +37,9 @@ enum BackgroundRefreshManager {
         }
 
         let work = Task { @MainActor in
+            // Network-free: alert for anything paying today regardless of the Wi-Fi gate.
+            await DividendSyncService.notifyPaydays(context: container.mainContext)
+
             // Respect the user's "Wi-Fi only" preference for unattended background runs.
             if AppSettings.backgroundWifiOnly, await !NetworkMonitor.isUnrestricted() {
                 task.setTaskCompleted(success: true) // try again at the next opportunity

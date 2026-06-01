@@ -182,6 +182,16 @@ enum DateUtil {
         utcCalendar.startOfDay(for: .now)
     }
 
+    /// Whether two instants fall on the same UTC calendar day.
+    static func isSameUTCDay(_ a: Date, _ b: Date) -> Bool {
+        utcCalendar.isDate(a, inSameDayAs: b)
+    }
+
+    /// Whether `date` is the current UTC calendar day.
+    static func isTodayUTC(_ date: Date) -> Bool {
+        isSameUTCDay(date, .now)
+    }
+
     static func parse(_ string: String?) -> Date? {
         guard let string, !string.isEmpty else { return nil }
         return formatter.date(from: string)

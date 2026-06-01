@@ -239,6 +239,52 @@ final class DividendSyncServiceTests: XCTestCase {
         XCTAssertTrue(body.contains("increased"), body)
         XCTAssertTrue(body.contains("from"), body)
     }
+
+    // MARK: - Payday notification
+
+    private func event(id: String, ticker: String, payDate: Date?, lastPaydayNotifiedOn: Date? = nil) -> DividendEvent {
+        DividendEvent(
+            id: id, ticker: ticker, companyName: ticker,
+            exDate: Calendar.current.date(byAdding: .day, value: -14, to: .now)!,
+            payDate: payDate, cashAmount: 0.25, currency: "USD", frequency: 4,
+            lastPaydayNotifiedOn: lastPaydayNotifiedOn
+        )
+    }
+
+    func testPaydaySelection() throws {
+        let today = DateUtil.startOfTodayUTC()
+        let other = Calendar.current.date(byAdding: .day, value: 3, to: today)!
+        let events = [
+            event(id: "a", ticker: "AAA", payDate: today),                       // pays today, unnotified
+            event(id: "b", ticker: "BBB", payDate: today, lastPaydayNotifiedOn: today), // already notified today
+            event(id: "c", ticker: "CCC", payDate: other),                       // pays another day
+            event(id: "d", ticker: "DDD", payDate: nil),                         // no pay date
+        ]
+
+        let result = DividendSyncService.paydayEvents(in: events, today: today)
+        XCTAssertEqual(Set(result.payingToday.map(\.id)), ["a", "b"])
+        XCTAssertEqual(result.needingNotification.map(\.id), ["a"], "Only the un-notified same-day event needs alerting")
+    }
+
+    func testNotifyPaydaysStampsAndIsIdempotent() async throws {
+        let container = try makeContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let today = DateUtil.startOfTodayUTC()
+        context.insert(event(id: "a", ticker: "AAA", payDate: today))
+        context.insert(event(id: "b", ticker: "BBB", payDate: today))
+        try context.save()
+
+        await DividendSyncService.notifyPaydays(context: context)
+
+        let after = try context.fetch(FetchDescriptor<DividendEvent>())
+        XCTAssertTrue(after.allSatisfy { $0.lastPaydayNotifiedOn.map { DateUtil.isSameUTCDay($0, today) } ?? false },
+                      "Both same-day events should be stamped as notified today")
+
+        // Second run finds nothing left needing notification.
+        let stillNeeding = DividendSyncService.paydayEvents(in: after, today: today).needingNotification
+        XCTAssertTrue(stillNeeding.isEmpty)
+    }
 }
 
 private final class MockDataSource: DividendDataSource {

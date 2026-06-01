@@ -19,8 +19,11 @@ final class DividendEvent {
     /// Amount of the previous comparable (same-cadence) dividend, for change detection.
     /// nil ⇒ no baseline ⇒ "New".
     var previousAmount: Double?
-    /// True once a local notification has been fired for this event.
+    /// True once the "new dividend" announcement notification has been fired for this event.
     var notified: Bool
+    /// UTC day on which the "paid today" notification last fired for this event (nil = never).
+    /// Guards the payday notification to once per dividend per day.
+    var lastPaydayNotifiedOn: Date?
     var discoveredAt: Date
 
     init(
@@ -36,6 +39,7 @@ final class DividendEvent {
         frequency: Int = 0,
         previousAmount: Double? = nil,
         notified: Bool = false,
+        lastPaydayNotifiedOn: Date? = nil,
         discoveredAt: Date = .now
     ) {
         self.id = id
@@ -50,6 +54,7 @@ final class DividendEvent {
         self.frequency = frequency
         self.previousAmount = previousAmount
         self.notified = notified
+        self.lastPaydayNotifiedOn = lastPaydayNotifiedOn
         self.discoveredAt = discoveredAt
     }
 

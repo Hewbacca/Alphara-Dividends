@@ -39,6 +39,34 @@ enum NotificationManager {
         }
     }
 
+    /// Fire ONE notification covering all dividends paying on the same day. A stable
+    /// per-day identifier means at most one payday banner exists per day (a later add with
+    /// the same id replaces it), so multiple same-day payments share one notification.
+    static func notifyPayday(_ events: [DividendEvent], dayKey: String) async {
+        guard !events.isEmpty else { return }
+        let sorted = events.sorted { $0.ticker < $1.ticker }
+
+        let content = UNMutableNotificationContent()
+        if let only = sorted.first, sorted.count == 1 {
+            content.title = "Dividend payment today"
+            content.body = "\(only.companyName) (\(only.ticker)) pays "
+                + "\(CurrencyFormat.string(only.cashAmount, currency: only.currency))/share today."
+        } else {
+            content.title = "\(sorted.count) dividend payments today"
+            content.body = sorted
+                .map { "\($0.ticker) \(CurrencyFormat.string($0.cashAmount, currency: $0.currency))" }
+                .joined(separator: ", ")
+        }
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "payday-\(dayKey)",
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
     static func body(for event: DividendEvent) -> String {
         let amount = CurrencyFormat.string(event.cashAmount, currency: event.currency)
         var parts = ["\(event.ticker) \(amount)/share (\(changeClause(for: event)))"]

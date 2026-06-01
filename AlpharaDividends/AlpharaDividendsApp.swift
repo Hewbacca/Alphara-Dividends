@@ -22,12 +22,19 @@ struct AlpharaDividendsApp: App {
                 .task {
                     WatchlistBackup.shared.configure(context: container.mainContext)
                     await NotificationManager.requestAuthorization()
+                    await DividendSyncService.notifyPaydays(context: container.mainContext)
                 }
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background {
+            switch phase {
+            case .background:
                 BackgroundRefreshManager.schedule()
+            case .active:
+                // Cheap, network-free: catch any dividend paying today when the app opens.
+                Task { await DividendSyncService.notifyPaydays(context: container.mainContext) }
+            default:
+                break
             }
         }
     }

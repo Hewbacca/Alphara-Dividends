@@ -94,12 +94,45 @@ struct DividendSyncService {
     ) async throws -> [DividendEvent] {
         let newEvents = try await sync(context: context, force: force, onProgress: onProgress)
         let toNotify = newEvents.filter { !$0.notified }
-        guard !toNotify.isEmpty else { return newEvents }
+        if !toNotify.isEmpty {
+            await NotificationManager.notify(toNotify)
+            for event in toNotify { event.notified = true }
+            if context.hasChanges { try context.save() }
+        }
 
-        await NotificationManager.notify(toNotify)
-        for event in toNotify { event.notified = true }
-        if context.hasChanges { try context.save() }
+        // Separately: anything paying today gets a shared "paid today" notification.
+        await Self.notifyPaydays(context: context)
         return newEvents
+    }
+
+    /// Dividends paying **today** (UTC). Returns the full same-day set plus the subset that
+    /// still needs a payday notification (not yet notified today). Pure → unit-testable.
+    static func paydayEvents(
+        in events: [DividendEvent], today: Date
+    ) -> (payingToday: [DividendEvent], needingNotification: [DividendEvent]) {
+        let payingToday = events.filter { event in
+            guard let pay = event.payDate else { return false }
+            return DateUtil.isSameUTCDay(pay, today)
+        }
+        let needingNotification = payingToday.filter { event in
+            guard let last = event.lastPaydayNotifiedOn else { return true }
+            return !DateUtil.isSameUTCDay(last, today)
+        }
+        return (payingToday, needingNotification)
+    }
+
+    /// Scan stored events and, if any pay today and haven't been payday-notified yet today,
+    /// fire one shared notification and stamp them. Network-free; safe to call on launch,
+    /// foreground, and in the background.
+    static func notifyPaydays(context: ModelContext) async {
+        let today = DateUtil.startOfTodayUTC()
+        guard let events = try? context.fetch(FetchDescriptor<DividendEvent>()) else { return }
+        let (payingToday, needing) = paydayEvents(in: events, today: today)
+        guard !needing.isEmpty else { return }
+
+        await NotificationManager.notifyPayday(payingToday, dayKey: DateUtil.apiString(today))
+        for event in payingToday { event.lastPaydayNotifiedOn = today }
+        try? context.save()
     }
 
     private func isStale(_ company: TrackedCompany, now: Date) -> Bool {
