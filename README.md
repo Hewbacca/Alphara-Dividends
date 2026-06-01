@@ -10,12 +10,14 @@ its payment date (or, if none is published, its ex-date) is today or later. So a
 that has already gone ex-dividend but hasn't paid yet still shows. The list is sorted by
 soonest payment date first.
 
-Each dividend shows how it compares to the company's previous **same-cadence** payment:
-**unchanged** (default color), **increased** (green ↑), or **cut** (red ↓), with **New**
-for anything lacking a comparable prior (first dividend, or only one-time specials, which
-are excluded from the comparison). Notifications include the same wording (e.g. "increased
-from $0.25"). The baseline comes from Polygon's per-ticker history in the same response we
-already fetch — no extra API calls and no separately stored history.
+Each dividend shows how it compares to the company's previous **same-cadence** payment, and
+**every row is labeled**: **Unchanged** (default color), **Increased** (green ↑), **Cut**
+(red ↓), or **New** when there's no comparable prior (first dividend, or only one-time
+specials, which are excluded from the comparison). Notifications include the same wording
+(e.g. "increased from $0.25"). The baseline comes from Polygon's per-ticker history in the
+same response we already fetch — no extra API calls and no separately stored history. Sync
+**upserts**: it refreshes the change classification on already-stored events too, so running
+**Refresh all now** once reclassifies dividends that were added before this feature existed.
 
 Rows are tinted by date status: **green** when the dividend pays today, **blue** when it goes
 ex-dividend today (dates compared in UTC). On the pay date, a separate **"paid today"**

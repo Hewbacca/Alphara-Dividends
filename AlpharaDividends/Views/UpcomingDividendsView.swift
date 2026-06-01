@@ -94,14 +94,11 @@ private struct DividendRow: View {
                     .foregroundStyle(changeColor)
             }
             HStack(spacing: 6) {
-                Text(event.ticker)
-                if let caption = changeCaption {
-                    Text("·")
-                    Text(caption)
-                }
+                Text(event.ticker).foregroundStyle(.secondary)
+                Text("·").foregroundStyle(.secondary)
+                Text(changeCaption).foregroundStyle(captionColor)
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Label(DateFormat.medium(event.exDate), systemImage: "calendar")
                 if let pay = event.payDate {
@@ -114,6 +111,7 @@ private struct DividendRow: View {
         .padding(.vertical, 2)
     }
 
+    /// Color of the amount: green for increases, red for cuts, default otherwise.
     private var changeColor: Color {
         switch event.change {
         case .increased: return .green
@@ -122,22 +120,34 @@ private struct DividendRow: View {
         }
     }
 
+    /// SF Symbol shown before the amount.
     private var changeSymbol: String? {
         switch event.change {
         case .increased: return "arrow.up"
         case .decreased: return "arrow.down"
-        case .unchanged, .new: return nil
+        case .unchanged: return "equal"
+        case .new: return nil
         }
     }
 
-    /// Secondary caption next to the ticker, e.g. "from $0.25" or "New".
-    private var changeCaption: String? {
+    /// Color of the status caption (secondary for unchanged/new so it reads as informational).
+    private var captionColor: Color {
+        switch event.change {
+        case .increased: return .green
+        case .decreased: return .red
+        case .unchanged, .new: return .secondary
+        }
+    }
+
+    /// Status caption next to the ticker — always present, e.g. "Increased from $0.25",
+    /// "Cut from $0.25", "Unchanged", "New".
+    private var changeCaption: String {
+        let prev = event.previousAmount.map { CurrencyFormat.string($0, currency: event.currency) }
         switch event.change {
         case .new: return "New"
-        case .increased, .decreased:
-            guard let prev = event.previousAmount else { return nil }
-            return "from \(CurrencyFormat.string(prev, currency: event.currency))"
-        case .unchanged: return nil
+        case .unchanged: return "Unchanged"
+        case .increased: return prev.map { "Increased from \($0)" } ?? "Increased"
+        case .decreased: return prev.map { "Cut from \($0)" } ?? "Cut"
         }
     }
 }

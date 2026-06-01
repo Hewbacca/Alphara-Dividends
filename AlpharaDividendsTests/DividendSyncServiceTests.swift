@@ -240,6 +240,36 @@ final class DividendSyncServiceTests: XCTestCase {
         XCTAssertTrue(body.contains("from"), body)
     }
 
+    func testExistingEventGetsPreviousAmountBackfilled() async throws {
+        let container = try makeContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: "AAPL", name: "Apple Inc."))
+
+        // An event stored before the change feature: same id as the upcoming record, no baseline.
+        let upcoming = record(id: "up", exDays: 5, payDays: 10, amount: 0.26)
+        let stale = DividendEvent(
+            id: "up", ticker: "AAPL", companyName: "Apple Inc.",
+            exDate: upcoming.exDate, payDate: upcoming.payDate,
+            cashAmount: 0.26, currency: "USD", frequency: 4,
+            previousAmount: nil, notified: true
+        )
+        context.insert(stale)
+        try context.save()
+        XCTAssertEqual(stale.change, .new)
+
+        let mock = MockDataSource(records: [
+            upcoming,
+            record(id: "p", exDays: -85, payDays: -80, amount: 0.25),
+        ])
+        let new = try await service(mock).sync(context: context)
+
+        XCTAssertTrue(new.isEmpty, "Existing event must not be re-notified")
+        XCTAssertEqual(stale.previousAmount, 0.25, "previousAmount should be backfilled")
+        XCTAssertEqual(stale.change, .increased)
+        XCTAssertTrue(stale.notified, "notification state must be preserved")
+    }
+
     // MARK: - Payday notification
 
     private func event(id: String, ticker: String, payDate: Date?, lastPaydayNotifiedOn: Date? = nil) -> DividendEvent {

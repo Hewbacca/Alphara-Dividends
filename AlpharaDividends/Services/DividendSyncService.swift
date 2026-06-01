@@ -37,7 +37,10 @@ struct DividendSyncService {
         guard !companies.isEmpty else { return [] }
 
         let today = DateUtil.startOfTodayUTC()
-        var existingIDs = Set(try context.fetch(FetchDescriptor<DividendEvent>()).map(\.id))
+        var existingByID = Dictionary(
+            try context.fetch(FetchDescriptor<DividendEvent>()).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var newEvents: [DividendEvent] = []
         let total = companies.count
 
@@ -58,23 +61,37 @@ struct DividendSyncService {
             // Keep a dividend while it is not yet paid (payment today/future), or — if no
             // payment date is published — while its ex-date is still upcoming.
             for record in records where (record.payDate ?? record.exDate) >= today {
-                guard !existingIDs.contains(record.id) else { continue }
-                let event = DividendEvent(
-                    id: record.id,
-                    ticker: record.ticker,
-                    companyName: company.name,
-                    exDate: record.exDate,
-                    payDate: record.payDate,
-                    recordDate: record.recordDate,
-                    declarationDate: record.declarationDate,
-                    cashAmount: record.cashAmount,
-                    currency: record.currency,
-                    frequency: record.frequency,
-                    previousAmount: Self.previousComparableAmount(for: record, in: records)
-                )
-                context.insert(event)
-                existingIDs.insert(record.id)
-                newEvents.append(event)
+                let prev = Self.previousComparableAmount(for: record, in: records)
+
+                if let existing = existingByID[record.id] {
+                    // Refresh data fields (so the change indicator reclassifies and any
+                    // provider corrections propagate) but preserve notification state.
+                    existing.previousAmount = prev
+                    existing.cashAmount = record.cashAmount
+                    existing.exDate = record.exDate
+                    existing.payDate = record.payDate
+                    existing.recordDate = record.recordDate
+                    existing.declarationDate = record.declarationDate
+                    existing.frequency = record.frequency
+                    existing.currency = record.currency
+                } else {
+                    let event = DividendEvent(
+                        id: record.id,
+                        ticker: record.ticker,
+                        companyName: company.name,
+                        exDate: record.exDate,
+                        payDate: record.payDate,
+                        recordDate: record.recordDate,
+                        declarationDate: record.declarationDate,
+                        cashAmount: record.cashAmount,
+                        currency: record.currency,
+                        frequency: record.frequency,
+                        previousAmount: prev
+                    )
+                    context.insert(event)
+                    existingByID[record.id] = event
+                    newEvents.append(event)
+                }
             }
 
             company.lastCheckedAt = now
