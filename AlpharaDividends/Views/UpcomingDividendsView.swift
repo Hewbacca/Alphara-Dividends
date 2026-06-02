@@ -25,10 +25,11 @@ struct UpcomingDividendsView: View {
     }
 
     /// Row highlight: green when it pays today, blue when it goes ex-dividend today.
-    /// (Payment-day takes precedence if both somehow fall today.)
+    /// Compared against the user's LOCAL calendar day so the highlight stays on until
+    /// midnight in the user's own timezone (not UTC midnight). Payment-day wins if both.
     private func rowBackground(for event: DividendEvent) -> Color? {
-        if let pay = event.payDate, DateUtil.isTodayUTC(pay) { return .green.opacity(0.18) }
-        if DateUtil.isTodayUTC(event.exDate) { return .blue.opacity(0.18) }
+        if let pay = event.payDate, DateUtil.isLocalToday(pay) { return .green.opacity(0.18) }
+        if DateUtil.isLocalToday(event.exDate) { return .blue.opacity(0.18) }
         return nil
     }
 
@@ -139,15 +140,22 @@ private struct DividendRow: View {
         }
     }
 
-    /// Status caption next to the ticker — always present, e.g. "Increased from $0.25",
-    /// "Cut from $0.25", "Unchanged", "New".
+    /// Status caption next to the ticker — always present, e.g. "Increased from $0.25 (+4.0%)",
+    /// "Cut from $0.25 (-20.0%)", "Unchanged", "New".
     private var changeCaption: String {
-        let prev = event.previousAmount.map { CurrencyFormat.string($0, currency: event.currency) }
         switch event.change {
         case .new: return "New"
         case .unchanged: return "Unchanged"
-        case .increased: return prev.map { "Increased from \($0)" } ?? "Increased"
-        case .decreased: return prev.map { "Cut from \($0)" } ?? "Cut"
+        case .increased, .decreased:
+            guard let prev = event.previousAmount, prev > 0 else {
+                return event.change == .increased ? "Increased" : "Cut"
+            }
+            let prevStr = CurrencyFormat.string(prev, currency: event.currency)
+            let pct = (event.cashAmount - prev) / prev * 100
+            let sign = pct >= 0 ? "+" : ""
+            let pctStr = String(format: "\(sign)%.1f%%", pct)
+            let verb = event.change == .increased ? "Increased" : "Cut"
+            return "\(verb) from \(prevStr) (\(pctStr))"
         }
     }
 }

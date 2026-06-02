@@ -282,16 +282,18 @@ final class DividendSyncServiceTests: XCTestCase {
     }
 
     func testPaydaySelection() throws {
-        let today = DateUtil.startOfTodayUTC()
-        let other = Calendar.current.date(byAdding: .day, value: 3, to: today)!
+        let now = Date.now
+        // Pay date whose UTC YYYY-MM-DD matches today's LOCAL calendar date (works across TZs).
+        let todayPayDate = DateUtil.startOfLocalTodayAsUTC()
+        let other = DateUtil.utcCalendar.date(byAdding: .day, value: 3, to: todayPayDate)!
         let events = [
-            event(id: "a", ticker: "AAA", payDate: today),                       // pays today, unnotified
-            event(id: "b", ticker: "BBB", payDate: today, lastPaydayNotifiedOn: today), // already notified today
-            event(id: "c", ticker: "CCC", payDate: other),                       // pays another day
-            event(id: "d", ticker: "DDD", payDate: nil),                         // no pay date
+            event(id: "a", ticker: "AAA", payDate: todayPayDate),                            // pays today
+            event(id: "b", ticker: "BBB", payDate: todayPayDate, lastPaydayNotifiedOn: now), // already notified today
+            event(id: "c", ticker: "CCC", payDate: other),                                   // pays another day
+            event(id: "d", ticker: "DDD", payDate: nil),                                     // no pay date
         ]
 
-        let result = DividendSyncService.paydayEvents(in: events, today: today)
+        let result = DividendSyncService.paydayEvents(in: events, today: now)
         XCTAssertEqual(Set(result.payingToday.map(\.id)), ["a", "b"])
         XCTAssertEqual(result.needingNotification.map(\.id), ["a"], "Only the un-notified same-day event needs alerting")
     }
@@ -300,19 +302,20 @@ final class DividendSyncServiceTests: XCTestCase {
         let container = try makeContainer()
         retainedContainers.append(container)
         let context = container.mainContext
-        let today = DateUtil.startOfTodayUTC()
-        context.insert(event(id: "a", ticker: "AAA", payDate: today))
-        context.insert(event(id: "b", ticker: "BBB", payDate: today))
+        // Pay date whose UTC YYYY-MM-DD matches today's LOCAL calendar date.
+        let todayPayDate = DateUtil.startOfLocalTodayAsUTC()
+        context.insert(event(id: "a", ticker: "AAA", payDate: todayPayDate))
+        context.insert(event(id: "b", ticker: "BBB", payDate: todayPayDate))
         try context.save()
 
         await DividendSyncService.notifyPaydays(context: context)
 
         let after = try context.fetch(FetchDescriptor<DividendEvent>())
-        XCTAssertTrue(after.allSatisfy { $0.lastPaydayNotifiedOn.map { DateUtil.isSameUTCDay($0, today) } ?? false },
-                      "Both same-day events should be stamped as notified today")
+        XCTAssertTrue(after.allSatisfy { $0.lastPaydayNotifiedOn.map { Calendar.current.isDateInToday($0) } ?? false },
+                      "Both same-day events should be stamped as notified today (local day)")
 
         // Second run finds nothing left needing notification.
-        let stillNeeding = DividendSyncService.paydayEvents(in: after, today: today).needingNotification
+        let stillNeeding = DividendSyncService.paydayEvents(in: after, today: Date.now).needingNotification
         XCTAssertTrue(stillNeeding.isEmpty)
     }
 }

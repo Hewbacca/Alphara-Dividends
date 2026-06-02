@@ -124,31 +124,35 @@ struct DividendSyncService {
 
     /// Dividends paying **today** (UTC). Returns the full same-day set plus the subset that
     /// still needs a payday notification (not yet notified today). Pure → unit-testable.
+    /// `today` here is `.now` — passed explicitly so tests can control it.
+    /// Uses local-timezone day comparison so the payday window aligns with the user's
+    /// calendar day rather than UTC midnight.
     static func paydayEvents(
         in events: [DividendEvent], today: Date
     ) -> (payingToday: [DividendEvent], needingNotification: [DividendEvent]) {
         let payingToday = events.filter { event in
             guard let pay = event.payDate else { return false }
-            return DateUtil.isSameUTCDay(pay, today)
+            return DateUtil.isLocalToday(pay)
         }
         let needingNotification = payingToday.filter { event in
             guard let last = event.lastPaydayNotifiedOn else { return true }
-            return !DateUtil.isSameUTCDay(last, today)
+            // The stamp is a live Date.now instant — compare using the local calendar
+            // so "notified today" means "notified during today in the user's timezone".
+            return !Calendar.current.isDateInToday(last)
         }
         return (payingToday, needingNotification)
     }
 
-    /// Scan stored events and, if any pay today and haven't been payday-notified yet today,
-    /// fire one shared notification and stamp them. Network-free; safe to call on launch,
-    /// foreground, and in the background.
+    /// Scan stored events and, if any pay today (local time) and haven't been payday-notified
+    /// yet today, fire one shared notification and stamp them. Network-free.
     static func notifyPaydays(context: ModelContext) async {
-        let today = DateUtil.startOfTodayUTC()
+        let now = Date.now
         guard let events = try? context.fetch(FetchDescriptor<DividendEvent>()) else { return }
-        let (payingToday, needing) = paydayEvents(in: events, today: today)
+        let (payingToday, needing) = paydayEvents(in: events, today: now)
         guard !needing.isEmpty else { return }
 
-        await NotificationManager.notifyPayday(payingToday, dayKey: DateUtil.apiString(today))
-        for event in payingToday { event.lastPaydayNotifiedOn = today }
+        await NotificationManager.notifyPayday(payingToday, dayKey: DateUtil.localTodayString())
+        for event in payingToday { event.lastPaydayNotifiedOn = now }
         try? context.save()
     }
 
