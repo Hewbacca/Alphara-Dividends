@@ -3,7 +3,7 @@ import SwiftData
 
 struct WatchlistView: View {
     @Environment(\.modelContext) private var context
-    @Query(sort: \TrackedCompany.name) private var companies: [TrackedCompany]
+    @Query(sort: \TrackedCompany.ticker) private var companies: [TrackedCompany]
     @State private var showingAdd = false
 
     var body: some View {
