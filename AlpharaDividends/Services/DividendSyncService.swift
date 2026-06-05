@@ -33,7 +33,18 @@ struct DividendSyncService {
     ) async throws -> [DividendEvent] {
         let allCompanies = try context.fetch(FetchDescriptor<TrackedCompany>())
         let now = Date()
-        let companies = force ? allCompanies : allCompanies.filter { isStale($0, now: now) }
+        let candidates = force ? allCompanies : allCompanies.filter { isStale($0, now: now) }
+        // Most-stale-first: nil (never checked) sorts before any date. This ensures background
+        // runs with a short budget advance through the longest-waiting tickers each time rather
+        // than repeatedly hitting the front of the list while the tail starves.
+        let companies = candidates.sorted {
+            switch ($0.lastCheckedAt, $1.lastCheckedAt) {
+            case (nil, nil): return false
+            case (nil, _): return true
+            case (_, nil): return false
+            case let (a?, b?): return a < b
+            }
+        }
         guard !companies.isEmpty else { return [] }
 
         let today = DateUtil.startOfTodayUTC()

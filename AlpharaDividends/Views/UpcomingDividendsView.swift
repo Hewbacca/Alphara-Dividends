@@ -69,7 +69,7 @@ struct UpcomingDividendsView: View {
         defer { isSyncing = false }
         let service = DividendSyncService(dataSource: PolygonClient())
         do {
-            try await service.syncAndNotify(context: context)
+            try await service.syncAndNotify(context: context, force: true)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

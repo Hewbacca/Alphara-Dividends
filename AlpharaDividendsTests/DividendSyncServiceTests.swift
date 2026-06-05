@@ -150,6 +150,45 @@ final class DividendSyncServiceTests: XCTestCase {
         XCTAssertEqual(mock.queriedTickers, ["AAPL"])
     }
 
+    // MARK: - Stale-first ordering
+
+    func testNonForcedSyncQueriesInMostStaleFirstOrder() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let recent = Date(timeIntervalSinceNow: -1 * 60 * 60)   // checked 1h ago
+        let old    = Date(timeIntervalSinceNow: -10 * 60 * 60)  // checked 10h ago (stalest)
+        // "never" has nil lastCheckedAt — must sort first of all
+        context.insert(TrackedCompany(ticker: "RECENT", name: "R", lastCheckedAt: recent))
+        context.insert(TrackedCompany(ticker: "OLD",    name: "O", lastCheckedAt: old))
+        context.insert(TrackedCompany(ticker: "NEVER",  name: "N"))
+
+        let mock = MockDataSource(records: [])
+        // staleAfter: 0 so all three are considered stale (non-forced path)
+        let svc = DividendSyncService(dataSource: mock, staleAfter: 0)
+        _ = try await svc.sync(context: context, force: false)
+
+        XCTAssertEqual(mock.queriedTickers, ["NEVER", "OLD", "RECENT"],
+                       "Most-stale-first: nil lastCheckedAt sorts before old, old before recent")
+    }
+
+    func testForcedSyncReChecksRecentlyCheckedTicker() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: "FRESH", name: "Fresh Co.", lastCheckedAt: .now))
+
+        let mock = MockDataSource(records: [record(id: "d1", ticker: "FRESH", daysFromNow: 10)])
+        let svc = DividendSyncService(dataSource: mock) // default 6h stale window
+
+        // Non-forced skips it.
+        _ = try await svc.sync(context: context, force: false)
+        XCTAssertEqual(mock.queriedTickers.count, 0, "Fresh ticker should be skipped without force")
+
+        // Forced re-checks it.
+        let new = try await svc.sync(context: context, force: true)
+        XCTAssertEqual(mock.queriedTickers, ["FRESH"])
+        XCTAssertEqual(new.map(\.id), ["d1"])
+    }
+
     // MARK: - Dividend change vs. previous payment
 
     private func record(

@@ -5,8 +5,11 @@ import os
 /// One-shot network reachability check used to decide whether a background sync may run
 /// under the "Wi-Fi only" preference.
 enum NetworkMonitor {
-    /// Returns true if the current path is satisfied and NOT expensive/constrained —
-    /// i.e. Wi-Fi or wired, not cellular or a personal hotspot.
+    /// Returns true if the current path is satisfied and NOT expensive (cellular / hotspot).
+    /// Low Data Mode (isConstrained) is intentionally not treated as a blocker — it only
+    /// signals a user preference for lower data use, not a metered connection, and refusing
+    /// it entirely means the app never refreshes on those devices. The timeout fallback
+    /// returns true so a momentary NWPathMonitor delay never silently skips a full run.
     static func isUnrestricted(timeout: TimeInterval = 5) async -> Bool {
         let monitor = NWPathMonitor()
         let queue = DispatchQueue(label: "com.alphara.dividends.netmonitor")
@@ -26,13 +29,13 @@ enum NetworkMonitor {
             }
 
             monitor.pathUpdateHandler = { path in
-                let ok = path.status == .satisfied && !path.isExpensive && !path.isConstrained
+                let ok = path.status == .satisfied && !path.isExpensive
                 finish(ok)
             }
             monitor.start(queue: queue)
 
-            // Safety net: if no path update arrives, don't hang the background task.
-            queue.asyncAfter(deadline: .now() + timeout) { finish(false) }
+            // Safety net: if no path update arrives allow the sync rather than silently skip.
+            queue.asyncAfter(deadline: .now() + timeout) { finish(true) }
         }
     }
 }

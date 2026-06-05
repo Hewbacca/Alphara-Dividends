@@ -14,6 +14,7 @@ struct AlpharaDividendsApp: App {
         }
         // Must be registered before launch completes.
         BackgroundRefreshManager.register(container: container)
+        BackgroundRefreshManager.scheduleAll()
     }
 
     var body: some Scene {
@@ -29,7 +30,7 @@ struct AlpharaDividendsApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
-                BackgroundRefreshManager.schedule()
+                BackgroundRefreshManager.scheduleAll()
             case .active:
                 // Cheap, network-free: catch any dividend paying today when the app opens.
                 Task { await DividendSyncService.notifyPaydays(context: container.mainContext) }

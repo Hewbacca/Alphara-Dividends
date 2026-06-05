@@ -46,6 +46,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.alphara.dividends.refresh</string>
+		<string>com.alphara.dividends.processing</string>
 	</array>
 </dict>
 </plist>

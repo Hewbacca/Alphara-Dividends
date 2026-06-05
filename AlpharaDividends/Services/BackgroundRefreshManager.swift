@@ -1,38 +1,91 @@
 import Foundation
 import BackgroundTasks
 import SwiftData
+import os
 
-/// Registers, schedules, and handles the opportunistic background refresh.
+/// Registers, schedules, and handles background refresh tasks.
 ///
-/// NOTE: `BGAppRefreshTask` is scheduled by iOS at its discretion — it is best-effort,
-/// not a guaranteed timer, and never runs while the app is force-quit. Foreground
-/// pull-to-refresh remains the reliable path.
+/// Two task types are used:
+/// - `BGAppRefreshTask` (≈30s): opportunistic, quick pass over the stalest tickers.
+/// - `BGProcessingTask` (minutes): thorough pass that can cover 10+ tickers at 13s spacing.
+///
+/// Both call the same `syncAndNotify`; iOS decides when each runs. The processing task
+/// is preferred on Wi-Fi/power, while the app-refresh fires more frequently.
 enum BackgroundRefreshManager {
-    static let taskIdentifier = "com.alphara.dividends.refresh"
+    static let refreshIdentifier    = "com.alphara.dividends.refresh"
+    static let processingIdentifier = "com.alphara.dividends.processing"
 
+    private static let logger = Logger(subsystem: "com.alphara.dividends", category: "background")
     private static var container: ModelContainer?
 
-    /// Register the task handler. Must be called before the app finishes launching.
+    /// Register both task handlers. Must be called before the app finishes launching.
     static func register(container: ModelContainer) {
         self.container = container
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
+
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshIdentifier, using: nil) { task in
             guard let task = task as? BGAppRefreshTask else { return }
-            handle(task)
+            handleRefresh(task)
+        }
+
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: processingIdentifier, using: nil) { task in
+            guard let task = task as? BGProcessingTask else { return }
+            handleProcessing(task)
         }
     }
 
-    /// Ask iOS to run us again later. Call after launch and whenever entering background.
-    static func schedule() {
-        let request = BGAppRefreshTaskRequest(identifier: taskIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 4 * 60 * 60) // ~4h
-        try? BGTaskScheduler.shared.submit(request)
+    /// Submit both task requests. Call after launch and on entering background.
+    static func scheduleAll() {
+        scheduleRefresh()
+        scheduleProcessing()
     }
 
-    private static func handle(_ task: BGAppRefreshTask) {
-        schedule() // always queue the next run first
+    static func scheduleRefresh() {
+        let request = BGAppRefreshTaskRequest(identifier: refreshIdentifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 4 * 60 * 60)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            logger.error("Failed to schedule app-refresh task: \(error)")
+        }
+    }
 
+    static func scheduleProcessing() {
+        let request = BGProcessingTaskRequest(identifier: processingIdentifier)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 4 * 60 * 60)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            logger.error("Failed to schedule processing task: \(error)")
+        }
+    }
+
+    private static func handleRefresh(_ task: BGAppRefreshTask) {
+        logger.info("BGAppRefreshTask started")
+        scheduleRefresh()
+        runSync(label: "app-refresh", completing: { success in task.setTaskCompleted(success: success) }) { work in
+            task.expirationHandler = { work.cancel() }
+        }
+    }
+
+    private static func handleProcessing(_ task: BGProcessingTask) {
+        logger.info("BGProcessingTask started")
+        scheduleProcessing()
+        runSync(label: "processing", completing: { success in task.setTaskCompleted(success: success) }) { work in
+            task.expirationHandler = { work.cancel() }
+        }
+    }
+
+    /// Shared sync body used by both task types.
+    private static func runSync(
+        label: String,
+        completing: @escaping (Bool) -> Void,
+        registerExpiration: (Task<Void, Never>) -> Void
+    ) {
         guard let container else {
-            task.setTaskCompleted(success: false)
+            logger.error("[\(label)] No container — aborting")
+            completing(false)
             return
         }
 
@@ -41,24 +94,30 @@ enum BackgroundRefreshManager {
             await DividendSyncService.notifyPaydays(context: container.mainContext)
 
             // Respect the user's "Wi-Fi only" preference for unattended background runs.
-            if AppSettings.backgroundWifiOnly, await !NetworkMonitor.isUnrestricted() {
-                task.setTaskCompleted(success: true) // try again at the next opportunity
-                return
+            if AppSettings.backgroundWifiOnly {
+                let ok = await NetworkMonitor.isUnrestricted()
+                if !ok {
+                    logger.info("[\(label)] Wi-Fi gate blocked sync (cellular/hotspot path)")
+                    completing(true) // try again at the next opportunity
+                    return
+                }
             }
 
-            // Uses the shared rate limiter (default) so foreground + background never
-            // collectively exceed the free tier's request budget.
+            logger.info("[\(label)] Starting dividend sync")
             let service = DividendSyncService(dataSource: PolygonClient())
             do {
-                _ = try await service.syncAndNotify(context: container.mainContext)
-                task.setTaskCompleted(success: true)
+                let newEvents = try await service.syncAndNotify(context: container.mainContext)
+                logger.info("[\(label)] Sync complete — \(newEvents.count) new event(s)")
+                completing(true)
+            } catch is CancellationError {
+                logger.info("[\(label)] Sync cancelled by expiration handler")
+                completing(false)
             } catch {
-                task.setTaskCompleted(success: false)
+                logger.error("[\(label)] Sync failed: \(error)")
+                completing(false)
             }
         }
 
-        task.expirationHandler = {
-            work.cancel()
-        }
+        registerExpiration(work)
     }
 }
