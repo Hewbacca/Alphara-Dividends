@@ -23,7 +23,7 @@ struct AlpharaDividendsApp: App {
                 .task {
                     WatchlistBackup.shared.configure(context: container.mainContext)
                     await NotificationManager.requestAuthorization()
-                    await DividendSyncService.notifyPaydays(context: container.mainContext)
+                    await DividendSyncService.reschedulePaydayNotifications(context: container.mainContext)
                 }
         }
         .modelContainer(container)
@@ -32,8 +32,9 @@ struct AlpharaDividendsApp: App {
             case .background:
                 BackgroundRefreshManager.scheduleAll()
             case .active:
-                // Cheap, network-free: catch any dividend paying today when the app opens.
-                Task { await DividendSyncService.notifyPaydays(context: container.mainContext) }
+                // Reschedule pre-scheduled alerts and fire an immediate banner if today's
+                // 8:30 am slot already passed (e.g. app opened later in the day).
+                Task { await DividendSyncService.reschedulePaydayNotifications(context: container.mainContext) }
             default:
                 break
             }

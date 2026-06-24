@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var isSyncing = false
     @State private var syncMessage: String?
     @AppStorage(AppSettings.backgroundWifiOnlyKey) private var backgroundWifiOnly = true
+    @AppStorage(AppSettings.paydayNotificationsEnabledKey) private var paydayNotificationsEnabled = true
 
     var body: some View {
         NavigationStack {
@@ -46,7 +47,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Dividends")
                 } footer: {
-                    Text("Re-checks every ticker. Calls are paced to the free tier's 5/minute, so a full refresh of a large watchlist can take several minutes — results appear as they load, and it keeps running if you switch tabs. Pull-to-refresh on Upcoming only re-checks tickers that haven't been checked recently.")
+                    Text("Re-checks every ticker. Calls are paced to the free tier\u{2019}s 5/minute, so a full refresh of a large watchlist can take several minutes \u{2014} results appear as they load, and it keeps running if you switch tabs. Pull-to-refresh on Upcoming only re-checks tickers that haven\u{2019}t been checked recently.")
                 }
 
                 Section {
@@ -54,7 +55,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Background")
                 } footer: {
-                    Text("When on, automatic background checks are skipped on cellular to save data. “Refresh now” and pull-to-refresh always work regardless of this setting.")
+                    Text("When on, automatic background checks are skipped on cellular to save data. \u{201C}Refresh now\u{201D} and pull-to-refresh always work regardless of this setting.")
                 }
 
                 Section {
@@ -73,8 +74,14 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    Toggle("Dividend payment-day alerts", isOn: $paydayNotificationsEnabled)
+                        .onChange(of: paydayNotificationsEnabled) { _, _ in
+                            Task {
+                                await DividendSyncService.reschedulePaydayNotifications(context: context)
+                            }
+                        }
                 } footer: {
-                    Text("New-dividend alerts are delivered as local notifications. Background checks run opportunistically when iOS allows; use “Refresh now” or pull-to-refresh for an immediate check.")
+                    Text("New-dividend alerts are delivered as local notifications. Payment-day alerts fire at 8:30\u{202F}am on each pay date and are pre-scheduled so they arrive even if you never open the app that day. Background checks run opportunistically when iOS allows; use \u{201C}Refresh now\u{201D} or pull-to-refresh for an immediate check.")
                 }
             }
             .navigationTitle("Settings")
@@ -111,7 +118,7 @@ struct SettingsView: View {
         let service = DividendSyncService(dataSource: PolygonClient())
         do {
             let new = try await service.syncAndNotify(context: context, force: true) { done, total in
-                syncMessage = "Checking \(done) of \(total)…"
+                syncMessage = "Checking \(done) of \(total)\u{2026}"
             }
             syncMessage = new.isEmpty ? "No new dividends found." : "Found \(new.count) new dividend(s)."
         } catch {

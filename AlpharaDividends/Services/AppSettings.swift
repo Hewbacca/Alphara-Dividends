@@ -15,4 +15,17 @@ enum AppSettings {
         }
         set { UserDefaults.standard.set(newValue, forKey: backgroundWifiOnlyKey) }
     }
+
+    static let paydayNotificationsEnabledKey = "paydayNotificationsEnabled"
+
+    /// When true, a local notification is pre-scheduled at 8:30 am (device-local time) for
+    /// each upcoming pay date, so it fires reliably even if the app is never opened that day.
+    /// Defaults to true.
+    static var paydayNotificationsEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: paydayNotificationsEnabledKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: paydayNotificationsEnabledKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: paydayNotificationsEnabledKey) }
+    }
 }

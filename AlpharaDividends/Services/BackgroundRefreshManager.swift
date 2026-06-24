@@ -41,7 +41,9 @@ enum BackgroundRefreshManager {
 
     static func scheduleRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: refreshIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 4 * 60 * 60)
+        // 15 minutes is iOS's practical floor for BGAppRefreshTask; iOS still throttles
+        // based on app-usage patterns — this is a floor, not a guaranteed cadence.
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
@@ -53,7 +55,8 @@ enum BackgroundRefreshManager {
         let request = BGProcessingTaskRequest(identifier: processingIdentifier)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 4 * 60 * 60)
+        // 1 hour floor; iOS may run less frequently depending on usage patterns.
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 60 * 60)
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
@@ -90,8 +93,9 @@ enum BackgroundRefreshManager {
         }
 
         let work = Task { @MainActor in
-            // Network-free: alert for anything paying today regardless of the Wi-Fi gate.
-            await DividendSyncService.notifyPaydays(context: container.mainContext)
+            // Reschedule pre-scheduled payday alerts and fire immediate banner if needed.
+            // Network-free, so runs regardless of the Wi-Fi gate.
+            await DividendSyncService.reschedulePaydayNotifications(context: container.mainContext)
 
             // Respect the user's "Wi-Fi only" preference for unattended background runs.
             if AppSettings.backgroundWifiOnly {

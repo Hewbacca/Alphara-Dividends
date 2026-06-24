@@ -115,6 +115,32 @@ final class DividendSyncServiceTests: XCTestCase {
         XCTAssertTrue(new.isEmpty)
     }
 
+    /// A previously-stored event whose payment date has since passed must be pruned from
+    /// the store on the next sync, so it stops showing on the Upcoming list.
+    func testStoredEventIsPrunedOnceItsPaymentIsPast() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(TrackedCompany(ticker: "HD", name: "Home Depot Inc."))
+
+        // An event captured earlier whose pay date is now 2 days in the past.
+        let cal = Calendar.current
+        let stale = DividendEvent(
+            id: "hd-past", ticker: "HD", companyName: "Home Depot Inc.",
+            exDate: cal.date(byAdding: .day, value: -16, to: .now)!,
+            payDate: cal.date(byAdding: .day, value: -2, to: .now)!,
+            cashAmount: 2.25, currency: "USD", frequency: 4
+        )
+        context.insert(stale)
+        try context.save()
+
+        // The provider no longer returns it (it's done); sync should delete it.
+        let mock = MockDataSource(records: [])
+        _ = try await service(mock).sync(context: context)
+
+        let stored = try context.fetch(FetchDescriptor<DividendEvent>())
+        XCTAssertTrue(stored.isEmpty, "Past-paid event should be pruned from the store")
+    }
+
     func testNewlyAnnouncedDividendIsDetected() async throws {
         let container = try makeContainer()
         let context = container.mainContext

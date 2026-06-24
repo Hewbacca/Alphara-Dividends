@@ -44,27 +44,68 @@ enum NotificationManager {
     /// the same id replaces it), so multiple same-day payments share one notification.
     static func notifyPayday(_ events: [DividendEvent], dayKey: String) async {
         guard !events.isEmpty else { return }
-        let sorted = events.sorted { $0.ticker < $1.ticker }
-
+        let (title, body) = paydayContent(for: events)
         let content = UNMutableNotificationContent()
-        if let only = sorted.first, sorted.count == 1 {
-            content.title = "Dividend payment today"
-            content.body = "\(only.companyName) (\(only.ticker)) pays "
-                + "\(CurrencyFormat.string(only.cashAmount, currency: only.currency))/share today."
-        } else {
-            content.title = "\(sorted.count) dividend payments today"
-            content.body = sorted
-                .map { "\($0.ticker) \(CurrencyFormat.string($0.cashAmount, currency: $0.currency))" }
-                .joined(separator: ", ")
-        }
+        content.title = title
+        content.body = body
         content.sound = .default
-
         let request = UNNotificationRequest(
             identifier: "payday-\(dayKey)",
             content: content,
             trigger: nil
         )
         try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Pre-schedule a payday notification to fire at `fireDate` (8:30 am local on the pay
+    /// date). Adding a request with the same identifier replaces any existing one, so
+    /// calling this repeatedly with the same `dayKey` is idempotent.
+    static func schedulePayday(events: [DividendEvent], dayKey: String, fireDate: Date) async {
+        guard !events.isEmpty else { return }
+        let (title, body) = paydayContent(for: events)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: "payday-\(dayKey)",
+            content: content,
+            trigger: trigger
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Cancel all pending `payday-*` requests (e.g. when the user disables the setting or
+    /// when rescheduling from scratch to drop stale requests).
+    static func removePendingPaydayNotifications() async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let ids = pending.filter { $0.identifier.hasPrefix("payday-") }.map(\.identifier)
+        guard !ids.isEmpty else { return }
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+    }
+
+    /// Pure helper: build the title and body for a payday notification given the set of
+    /// events that share a pay date. Used by both the immediate and pre-scheduled paths so
+    /// they produce identical copy.
+    static func paydayContent(for events: [DividendEvent]) -> (title: String, body: String) {
+        let sorted = events.sorted { $0.ticker < $1.ticker }
+        if let only = sorted.first, sorted.count == 1 {
+            return (
+                title: "Dividend payment today",
+                body: "\(only.companyName) (\(only.ticker)) pays "
+                    + "\(CurrencyFormat.string(only.cashAmount, currency: only.currency))/share today."
+            )
+        } else {
+            return (
+                title: "\(sorted.count) dividend payments today",
+                body: sorted
+                    .map { "\($0.ticker) \(CurrencyFormat.string($0.cashAmount, currency: $0.currency))" }
+                    .joined(separator: ", ")
+            )
+        }
     }
 
     static func body(for event: DividendEvent) -> String {

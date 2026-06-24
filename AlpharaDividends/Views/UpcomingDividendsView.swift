@@ -1,14 +1,40 @@
 import SwiftUI
 import SwiftData
 
+/// Owns the "today" threshold and refreshes it when the calendar day rolls over or
+/// the app returns to the foreground, so past-paid dividends drop off the list without
+/// needing a manual refresh. The actual list lives in `UpcomingDividendsList`, re-keyed
+/// on `dayToken` so its `@Query` predicate is rebuilt against the current day.
 struct UpcomingDividendsView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var dayToken = DateUtil.startOfTodayUTC()
+
+    var body: some View {
+        UpcomingDividendsList(today: dayToken)
+            .id(dayToken)
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+                refreshDayToken()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { refreshDayToken() }
+            }
+    }
+
+    /// Recompute the day threshold, assigning only when it actually changed so we don't
+    /// needlessly tear down and rebuild the list.
+    private func refreshDayToken() {
+        let current = DateUtil.startOfTodayUTC()
+        if current != dayToken { dayToken = current }
+    }
+}
+
+private struct UpcomingDividendsList: View {
     @Environment(\.modelContext) private var context
     @Query private var events: [DividendEvent]
     @State private var errorMessage: String?
     @State private var isSyncing = false
 
-    init() {
-        let today = DateUtil.startOfTodayUTC()
+    init(today: Date) {
         // "Upcoming" = not yet paid: keep a dividend while its payment date (or, if
         // unknown, its ex-date) is today or later. This includes dividends that have
         // already gone ex-dividend but whose payment is still pending.

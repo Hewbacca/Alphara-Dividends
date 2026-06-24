@@ -48,8 +48,18 @@ struct DividendSyncService {
         guard !companies.isEmpty else { return [] }
 
         let today = DateUtil.startOfTodayUTC()
+
+        // Prune events that have aged out (payment, or ex-date when unpublished, now in the
+        // past) so the store stays bounded and matches what the UI shows. Safe: payday
+        // rescheduling already excludes past dates and change classification derives history
+        // from the freshly-fetched API records, not stored events.
+        let storedEvents = try context.fetch(FetchDescriptor<DividendEvent>())
+        for event in storedEvents where (event.payDate ?? event.exDate) < today {
+            context.delete(event)
+        }
+
         var existingByID = Dictionary(
-            try context.fetch(FetchDescriptor<DividendEvent>()).map { ($0.id, $0) },
+            storedEvents.filter { (($0.payDate ?? $0.exDate) >= today) }.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         var newEvents: [DividendEvent] = []
@@ -128,8 +138,9 @@ struct DividendSyncService {
             if context.hasChanges { try context.save() }
         }
 
-        // Separately: anything paying today gets a shared "paid today" notification.
-        await Self.notifyPaydays(context: context)
+        // Reschedule pre-scheduled payday alerts and fire an immediate one if today's
+        // payment window already passed 8:30 am.
+        await Self.reschedulePaydayNotifications(context: context)
         return newEvents
     }
 
@@ -165,6 +176,62 @@ struct DividendSyncService {
         await NotificationManager.notifyPayday(payingToday, dayKey: DateUtil.localTodayString())
         for event in payingToday { event.lastPaydayNotifiedOn = now }
         try? context.save()
+    }
+
+    /// Pre-schedule one `UNCalendarNotificationTrigger` per upcoming pay date (at 8:30 am
+    /// device-local time), replacing the purely-opportunistic approach.
+    ///
+    /// - Clears all pending `payday-*` requests first so stale ones never linger.
+    /// - Caps to the 50 nearest pay dates to stay well under iOS's 64-pending limit.
+    /// - For today's pay date after 8:30 am (i.e. the pre-scheduled slot already fired or was
+    ///   never set), falls back to an immediate banner via the existing `notifyPaydays` logic.
+    /// - When the user disables the setting, removes pending requests and returns.
+    static func reschedulePaydayNotifications(context: ModelContext) async {
+        // Always clear stale requests before rescheduling.
+        await NotificationManager.removePendingPaydayNotifications()
+        guard AppSettings.paydayNotificationsEnabled else { return }
+
+        guard let allEvents = try? context.fetch(FetchDescriptor<DividendEvent>()) else { return }
+        let now = Date.now
+        let startOfLocalToday = Calendar.current.startOfDay(for: now)
+
+        // Group events by their Polygon calendar date (UTC components), building a local
+        // 8:30 am fire date for each. Drop fully-past pay dates.
+        var groupsByKey: [String: (fireDate: Date, events: [DividendEvent])] = [:]
+        for event in allEvents {
+            guard let pay = event.payDate else { continue }
+            let utcComps = DateUtil.utcCalendar.dateComponents([.year, .month, .day], from: pay)
+            guard let y = utcComps.year, let m = utcComps.month, let d = utcComps.day else { continue }
+            var localComps = DateComponents()
+            localComps.year = y; localComps.month = m; localComps.day = d
+            localComps.hour = 8; localComps.minute = 30
+            guard let fireDate = Calendar.current.date(from: localComps) else { continue }
+            // Exclude pay dates whose local calendar day is before today.
+            guard Calendar.current.startOfDay(for: fireDate) >= startOfLocalToday else { continue }
+            let key = String(format: "%04d-%02d-%02d", y, m, d)
+            if groupsByKey[key] == nil {
+                groupsByKey[key] = (fireDate, [event])
+            } else {
+                groupsByKey[key]!.events.append(event)
+            }
+        }
+
+        // Schedule nearest 50 pay dates; for today past 8:30 fall back to immediate banner.
+        let sorted = groupsByKey.sorted { $0.key < $1.key }.prefix(50)
+        for (key, group) in sorted {
+            if group.fireDate > now {
+                await NotificationManager.schedulePayday(events: group.events, dayKey: key, fireDate: group.fireDate)
+            } else {
+                // Today, and the 8:30 slot has already passed — fire an immediate banner
+                // using the existing dedup logic (lastPaydayNotifiedOn stamp).
+                let (payingToday, needing) = paydayEvents(in: group.events, today: now)
+                if !needing.isEmpty {
+                    await NotificationManager.notifyPayday(payingToday, dayKey: key)
+                    for event in payingToday { event.lastPaydayNotifiedOn = now }
+                    try? context.save()
+                }
+            }
+        }
     }
 
     private func isStale(_ company: TrackedCompany, now: Date) -> Bool {
