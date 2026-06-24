@@ -110,20 +110,20 @@ private struct DividendRow: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(event.companyName).font(.headline)
                 Spacer()
-                if let symbol = changeSymbol {
+                if let symbol = event.change.symbolName {
                     Image(systemName: symbol)
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(changeColor)
+                        .foregroundStyle(event.change.color)
                 }
                 Text(CurrencyFormat.string(event.cashAmount, currency: event.currency))
                     .font(.headline)
                     .monospacedDigit()
-                    .foregroundStyle(changeColor)
+                    .foregroundStyle(event.change.color)
             }
             HStack(spacing: 6) {
                 Text(event.ticker).foregroundStyle(.secondary)
                 Text("·").foregroundStyle(.secondary)
-                Text(changeCaption).foregroundStyle(captionColor)
+                Text(event.changeCaption).foregroundStyle(event.change.captionColor)
             }
             .font(.caption)
             HStack(spacing: 12) {
@@ -136,52 +136,5 @@ private struct DividendRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-    }
-
-    /// Color of the amount: green for increases, red for cuts, default otherwise.
-    private var changeColor: Color {
-        switch event.change {
-        case .increased: return .green
-        case .decreased: return .red
-        case .unchanged, .new: return .primary
-        }
-    }
-
-    /// SF Symbol shown before the amount.
-    private var changeSymbol: String? {
-        switch event.change {
-        case .increased: return "arrow.up"
-        case .decreased: return "arrow.down"
-        case .unchanged: return "equal"
-        case .new: return nil
-        }
-    }
-
-    /// Color of the status caption (secondary for unchanged/new so it reads as informational).
-    private var captionColor: Color {
-        switch event.change {
-        case .increased: return .green
-        case .decreased: return .red
-        case .unchanged, .new: return .secondary
-        }
-    }
-
-    /// Status caption next to the ticker — always present, e.g. "Increased from $0.25 (+4.0%)",
-    /// "Cut from $0.25 (-20.0%)", "Unchanged", "New".
-    private var changeCaption: String {
-        switch event.change {
-        case .new: return "New"
-        case .unchanged: return "Unchanged"
-        case .increased, .decreased:
-            guard let prev = event.previousAmount, prev > 0 else {
-                return event.change == .increased ? "Increased" : "Cut"
-            }
-            let prevStr = CurrencyFormat.string(prev, currency: event.currency)
-            let pct = (event.cashAmount - prev) / prev * 100
-            let sign = pct >= 0 ? "+" : ""
-            let pctStr = String(format: "\(sign)%.1f%%", pct)
-            let verb = event.change == .increased ? "Increased" : "Cut"
-            return "\(verb) from \(prevStr) (\(pctStr))"
-        }
     }
 }

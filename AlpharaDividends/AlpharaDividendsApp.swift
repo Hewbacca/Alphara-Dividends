@@ -8,7 +8,7 @@ struct AlpharaDividendsApp: App {
 
     init() {
         do {
-            container = try ModelContainer(for: TrackedCompany.self, DividendEvent.self)
+            container = try SharedModelContainer.make()
         } catch {
             fatalError("Failed to create the SwiftData container: \(error)")
         }

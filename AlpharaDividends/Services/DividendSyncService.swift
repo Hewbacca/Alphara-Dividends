@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import WidgetKit
 
 /// Core sync engine, shared by foreground refresh and the background task.
 ///
@@ -141,6 +142,9 @@ struct DividendSyncService {
         // Reschedule pre-scheduled payday alerts and fire an immediate one if today's
         // payment window already passed 8:30 am.
         await Self.reschedulePaydayNotifications(context: context)
+
+        // Refresh the home-screen widget so it reflects the latest upcoming dividends.
+        WidgetCenter.shared.reloadAllTimelines()
         return newEvents
     }
 

@@ -53,15 +53,26 @@ network-free and runs on launch, on foreground, and in the background.
   it survives *reinstalls* and appears on the user's other devices. Requires the iCloud
   **Key-value storage** capability (see Build & run).
 
+- **Home-screen widget:** a WidgetKit extension (`AlpharaDividendsWidget`) shows the same
+  Upcoming table in **medium** and **large** sizes. It reads the SwiftData store directly,
+  which is why the store lives in a shared **App Group** (`group.com.alphara.dividends`) that
+  both the app and the widget can access. The app reloads the widget after every sync
+  (`WidgetCenter.reloadAllTimelines()`), and the widget also refreshes itself at the next UTC
+  midnight so paid-out dividends drop off automatically.
+
 ### Source layout
 ```
 AlpharaDividends/
   AlpharaDividendsApp.swift     App entry: SwiftData container, BG task registration, notif auth, iCloud restore
   Models/                       TrackedCompany, DividendEvent (@Model)
+  Shared/                       Code compiled into BOTH app and widget: SharedModelContainer
+                                (App Group store + one-time migration), DateUtil, Formatting
+                                (CurrencyFormat/DateFormat), DividendChange+UI
   Services/                     PolygonClient, DividendSyncService, BackgroundRefreshManager,
                                 NotificationManager, RateLimiter, KeychainStore, DividendDataSource,
                                 NetworkMonitor, AppSettings, WatchlistBackup
   Views/                        RootView, UpcomingDividendsView, WatchlistView, AddTickerView, SettingsView
+AlpharaDividendsWidget/         WidgetKit extension: UpcomingDividendsWidget (medium/large), bundle, Info.plist, entitlements
 AlpharaDividendsTests/          DividendSyncService dedupe / detection / coverage tests
 ```
 
@@ -82,11 +93,19 @@ device, and Run. (Building/running requires full **Xcode**, not just Command Lin
 > **Re-run `xcodegen generate` after pulling changes** that add files (XcodeGen uses
 > explicit file references, so new sources/assets won't appear in the project otherwise).
 
-**Signing / capability:** set your Team for signing, and enable the **iCloud → Key-value
-storage** capability for the app target (the `com.apple.developer.ubiquity-kvstore-identifier`
-entitlement is already in `AlpharaDividends.entitlements`). Without it the app still runs;
-the watchlist just won't back up to iCloud. The icon, background modes, and notifications
-need no extra setup.
+**Signing / capability:** set your Team for signing on **both** the `AlpharaDividends` and
+`AlpharaDividendsWidget` targets, and enable:
+- **iCloud → Key-value storage** on the app target (the
+  `com.apple.developer.ubiquity-kvstore-identifier` entitlement is already in
+  `AlpharaDividends.entitlements`). Without it the app still runs; the watchlist just won't
+  back up to iCloud.
+- **App Groups** on **both** targets, using the group `group.com.alphara.dividends` (already
+  declared in each target's `.entitlements`). This shared container is how the widget reads
+  the app's dividend data — without it the widget shows an empty state. On first launch after
+  enabling it, any pre-existing on-device store is copied into the App Group automatically
+  (see `SharedModelContainer`).
+
+The icon, background modes, and notifications need no extra setup.
 
 ### First-time setup in the app
 1. **Settings → Polygon API key:** paste a free key from
